@@ -35,11 +35,14 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   }
   // we already read pages 3-6 earlier -- pick up where we left off so we're not re-reading pages
   const uint8_t read_length = message_length + message_start_index > 12 ? message_length + message_start_index - 12 : 0;
+  ESP_LOGD(TAG, "Need to read additional %u bytes (message_length=%u, start_index=%u)", 
+           read_length, message_length, message_start_index);
   if (read_length) {
     if (!this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, read_length, data)) {
       ESP_LOGE(TAG, "Error reading tag data");
       return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
     }
+    ESP_LOGD(TAG, "After additional read, data size: %u", data.size());
   }
   
   // Check if we have enough data to trim
@@ -51,8 +54,16 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   
   // Check if we have enough data for the message
   if (data.size() < trim_offset + message_length) {
-    ESP_LOGE(TAG, "Not enough data for message: data size %u, need %u", data.size(), trim_offset + message_length);
-    return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+    ESP_LOGW(TAG, "Not enough data for full message: data size %u, need %u", data.size(), trim_offset + message_length);
+    ESP_LOGW(TAG, "Truncating message to available data");
+    // Adjust message length to what's actually available
+    if (data.size() > trim_offset) {
+      message_length = data.size() - trim_offset;
+      ESP_LOGD(TAG, "Adjusted message length to %u bytes", message_length);
+    } else {
+      ESP_LOGE(TAG, "No message data available after trim offset");
+      return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+    }
   }
   
   // we need to trim off page 3 as well as any bytes ahead of message_start_index
@@ -133,26 +144,28 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
   if (page_3_to_6[p4_offset + 0] == 0x03) {
     
 	if (page_3_to_6[p4_offset + 1] == 0xFF) {
-      // dynamic length: byte 0 = 0x03; byte 1 = 0xFF; Length in byte 2 and 3 (big-endian)
+      // Check if this is really extended length format or just length = 255
       if (page_3_to_6.size() < p4_offset + 4) {
         ESP_LOGE(TAG, "Not enough data for dynamic length format");
         return false;
       }
-      uint8_t high_byte = page_3_to_6[p4_offset + 2];
-      uint8_t low_byte = page_3_to_6[p4_offset + 3];
-      ESP_LOGD(TAG, "Dynamic length bytes: high=0x%02X, low=0x%02X", high_byte, low_byte);
-	  message_length = high_byte * 256 + low_byte;
+      uint8_t potential_high_byte = page_3_to_6[p4_offset + 2];
+      uint8_t potential_low_byte = page_3_to_6[p4_offset + 3];
+      ESP_LOGD(TAG, "Potential length bytes: high=0x%02X, low=0x%02X", potential_high_byte, potential_low_byte);
+	  uint16_t potential_length = potential_high_byte * 256 + potential_low_byte;
       
-      // Sanity check: MIFARE Ultralight typically has 48-924 bytes of user memory
-      if (message_length > 924) {
-        ESP_LOGW(TAG, "Message length %u seems too large, treating 0xFF as data instead", message_length);
-        // Maybe the 0xFF is not an extended length indicator, treat byte 1 as length
-        message_length = page_3_to_6[p4_offset + 1];
-        message_start_index = 2;
-        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (fallback), length=%u", message_length);
-      } else {
+      // Only treat as extended length if the calculated length makes sense for the available data
+      // Extended length should only be used for lengths > 254, and must be reasonable
+      if (potential_length > 254 && potential_length <= 924) {
+        message_length = potential_length;
         message_start_index = 4;
-        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a, length=%u", message_length);
+        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a (extended), length=%u", message_length);
+      } else {
+        // Treat 0xFF as regular length = 255
+        ESP_LOGD(TAG, "Treating 0xFF as regular length (255), not extended format");
+        message_length = page_3_to_6[p4_offset + 1];  // 255
+        message_start_index = 2;
+        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (255 bytes), length=%u", message_length);
       }
 	} else {
       // fixed length: byte 0 = 0x03; byte 1 = Length
