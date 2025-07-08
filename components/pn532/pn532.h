@@ -88,7 +88,7 @@ class PN532 : public PollingComponent {
   bool is_mifare_ultralight_formatted_(const std::vector<uint8_t> &page_3_to_6);
   uint16_t read_mifare_ultralight_capacity_();
   bool find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6, uint16_t &message_length,
-    uint8_t &message_start_index);
+                                    uint8_t &message_start_index);
   bool write_mifare_ultralight_page_(uint8_t page_num, std::vector<uint8_t> &write_data);
   bool write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMessage *message);
   bool clean_mifare_ultralight_();
