@@ -120,6 +120,7 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
                                          uint8_t &message_start_index) {
   const uint8_t p4_offset = nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;  // page 4 will begin 4 bytes into the vector
   ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_");
+  ESP_LOGD(TAG, "Full page data (pages 3-6): %s", nfc::format_bytes(page_3_to_6).c_str());
   ESP_LOGD(TAG, "Page 4 data: %02X %02X %02X %02X", 
            page_3_to_6[p4_offset + 0], page_3_to_6[p4_offset + 1], 
            page_3_to_6[p4_offset + 2], page_3_to_6[p4_offset + 3]);
@@ -131,22 +132,32 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
   if (page_3_to_6[p4_offset + 0] == 0x03) {
     
 	if (page_3_to_6[p4_offset + 1] == 0xFF) {
-      // dynamic length: byte 0 = 0x03; byte 1 = 0xFF; Length in byte 2 and 3 (little-endian)
+      // dynamic length: byte 0 = 0x03; byte 1 = 0xFF; Length in byte 2 and 3 (big-endian)
       if (page_3_to_6.size() < p4_offset + 4) {
         ESP_LOGE(TAG, "Not enough data for dynamic length format");
         return false;
       }
-      uint8_t low_byte = page_3_to_6[p4_offset + 2];
-      uint8_t high_byte = page_3_to_6[p4_offset + 3];
-      ESP_LOGD(TAG, "Dynamic length bytes: low=0x%02X, high=0x%02X", low_byte, high_byte);
+      uint8_t high_byte = page_3_to_6[p4_offset + 2];
+      uint8_t low_byte = page_3_to_6[p4_offset + 3];
+      ESP_LOGD(TAG, "Dynamic length bytes: high=0x%02X, low=0x%02X", high_byte, low_byte);
 	  message_length = high_byte * 256 + low_byte;
-      message_start_index = 4;
-      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a");
+      
+      // Sanity check: MIFARE Ultralight typically has 48-924 bytes of user memory
+      if (message_length > 924) {
+        ESP_LOGW(TAG, "Message length %u seems too large, treating 0xFF as data instead", message_length);
+        // Maybe the 0xFF is not an extended length indicator, treat byte 1 as length
+        message_length = page_3_to_6[p4_offset + 1];
+        message_start_index = 2;
+        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (fallback), length=%u", message_length);
+      } else {
+        message_start_index = 4;
+        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a, length=%u", message_length);
+      }
 	} else {
       // fixed length: byte 0 = 0x03; byte 1 = Length
 	  message_length = page_3_to_6[p4_offset + 1];
       message_start_index = 2;
-      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b");
+      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b, length=%u", message_length);
     }
     return true;
   } else if (page_3_to_6[p4_offset + 5] == 0x03) {
@@ -181,8 +192,8 @@ bool PN532::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMes
     encoded.insert(encoded.begin() + 1, message_length);
   } else {
     encoded.insert(encoded.begin() + 1, 0xFF);
-    encoded.insert(encoded.begin() + 2, message_length & 0xFF);        // low byte first
-    encoded.insert(encoded.begin() + 3, (message_length >> 8) & 0xFF); // high byte second
+    encoded.insert(encoded.begin() + 2, (message_length >> 8) & 0xFF); // high byte first
+    encoded.insert(encoded.begin() + 3, message_length & 0xFF);        // low byte second
   }
   encoded.push_back(0xFE);
 
