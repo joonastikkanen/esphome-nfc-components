@@ -75,6 +75,12 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
     data.resize(message_length);
   }
 
+  ESP_LOGD(TAG, "Final NDEF message data (%u bytes): %s", data.size(), 
+           data.size() <= 32 ? [&data]() { 
+             std::vector<uint8_t> temp = data; 
+             return nfc::format_bytes(temp); 
+           }().c_str() : "too long to display");
+
   return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2, data);
 }
 
@@ -144,29 +150,50 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
   if (page_3_to_6[p4_offset + 0] == 0x03) {
     
 	if (page_3_to_6[p4_offset + 1] == 0xFF) {
-      // Check if this is really extended length format or just length = 255
+      // The byte 0xFF could mean either:
+      // 1. Regular length = 255 bytes (2-byte TLV: Type=0x03, Length=0xFF)
+      // 2. Extended length indicator (4-byte TLV: Type=0x03, Ext=0xFF, Length=HH LL)
+      
+      // Check if we have enough data for extended length format
       if (page_3_to_6.size() < p4_offset + 4) {
-        ESP_LOGE(TAG, "Not enough data for dynamic length format");
+        ESP_LOGE(TAG, "Not enough data for extended length format");
         return false;
       }
+      
       uint8_t potential_high_byte = page_3_to_6[p4_offset + 2];
       uint8_t potential_low_byte = page_3_to_6[p4_offset + 3];
       ESP_LOGD(TAG, "Potential length bytes: high=0x%02X, low=0x%02X", potential_high_byte, potential_low_byte);
-	  uint16_t potential_length = potential_high_byte * 256 + potential_low_byte;
       
-      // Only treat as extended length if the calculated length makes sense for the available data
-      // Extended length should only be used for lengths > 254, and must be reasonable
-      if (potential_length > 254 && potential_length <= 924) {
-        message_length = potential_length;
-        message_start_index = 4;
-        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a (extended), length=%u", message_length);
-      } else {
-        // Treat 0xFF as regular length = 255
-        ESP_LOGD(TAG, "Treating 0xFF as regular length (255), not extended format");
-        message_length = page_3_to_6[p4_offset + 1];  // 255
+      // Key insight: If the byte after 0xFF is 0x03, it's likely the start of a new TLV,
+      // not part of extended length format. Extended length format: 03 FF HH LL
+      // But pattern like "03 FF 03 xx" suggests: TLV1=(03 FF) TLV2=(03 xx)
+      if (potential_high_byte == 0x03) {
+        ESP_LOGD(TAG, "Byte after 0xFF is 0x03 - treating as new TLV, not extended length");
+        message_length = 255;  // Treat as regular 255-byte message
         message_start_index = 2;
-        ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (255 bytes), length=%u", message_length);
+      } else {
+        // Check if extended length makes sense
+        uint16_t potential_length = potential_high_byte * 256 + potential_low_byte;
+        
+        // Extended length should only be used for lengths > 254
+        if (potential_length > 254 && potential_length <= 924) {
+          ESP_LOGD(TAG, "Using extended length format: %u bytes", potential_length);
+          message_length = potential_length;
+          message_start_index = 4;
+        } else {
+          ESP_LOGD(TAG, "Extended length %u is invalid, treating as regular length (255)", potential_length);
+          message_length = 255;
+          message_start_index = 2;
+        }
       }
+      
+      // Additional sanity check: if 255 bytes seems too large for available data,
+      // maybe this tag has corrupted length information
+      if (message_length > 100) {  // 100 bytes is a reasonable upper limit for most tags
+        ESP_LOGW(TAG, "Length %u seems large, tag may have corrupted length field", message_length);
+      }
+      
+      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (255 bytes), length=%u", message_length);
 	} else {
       // fixed length: byte 0 = 0x03; byte 1 = Length
 	  message_length = page_3_to_6[p4_offset + 1];
