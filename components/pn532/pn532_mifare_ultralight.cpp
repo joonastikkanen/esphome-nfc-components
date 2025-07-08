@@ -92,6 +92,9 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   
   // Check if there's another TLV inside the message data
   // Look for pattern like "xx xx xx xx 03 yy" where 03 is another NDEF TLV
+  std::vector<uint8_t> combined_inner_data;
+  bool found_inner_tlv = false;
+  
   for (size_t i = 0; i < data.size() - 1; i++) {
     if (data[i] == 0x03 && i + 1 < data.size()) {
       uint8_t inner_length = data[i + 1];
@@ -110,11 +113,46 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
                    return nfc::format_bytes(temp);
                  }().c_str() : "too long to display");
         
-        // Replace the current data with the inner message
-        data = inner_data;
-        break;
+        // Analyze the NDEF record structure
+        if (inner_data.size() >= 4) {
+          uint8_t flags = inner_data[0];
+          uint8_t type_length = inner_data[1];
+          ESP_LOGD(TAG, "NDEF record analysis: flags=0x%02X, type_length=%u", flags, type_length);
+          ESP_LOGD(TAG, "  MB=%u, ME=%u, CF=%u, SR=%u, IL=%u, TNF=%u", 
+                   (flags >> 7) & 1, (flags >> 6) & 1, (flags >> 5) & 1, 
+                   (flags >> 4) & 1, (flags >> 3) & 1, flags & 7);
+          
+          // Check if this is a short record (SR=1)
+          bool is_short_record = (flags & 0x10) != 0;
+          if (is_short_record) {
+            ESP_LOGD(TAG, "  Short record format detected");
+            if (inner_data.size() >= 3) {
+              uint8_t payload_length = inner_data[2];
+              ESP_LOGD(TAG, "  Payload length: %u", payload_length);
+              
+              // The complete record should be: flags + type_length + payload_length + type + payload
+              uint32_t expected_size = 3 + type_length + payload_length;
+              ESP_LOGD(TAG, "  Expected total record size: %u, actual: %u", expected_size, inner_data.size());
+            }
+          }
+        }
+        
+        if (!found_inner_tlv) {
+          // First inner TLV found - use it as the base
+          combined_inner_data = inner_data;
+          found_inner_tlv = true;
+        } else {
+          // Subsequent inner TLVs - append to the combined data
+          ESP_LOGD(TAG, "Appending additional inner TLV data");
+          combined_inner_data.insert(combined_inner_data.end(), inner_data.begin(), inner_data.end());
+        }
       }
     }
+  }
+  
+  if (found_inner_tlv) {
+    ESP_LOGD(TAG, "Using combined inner TLV data (%u bytes)", combined_inner_data.size());
+    data = combined_inner_data;
   }
 
   ESP_LOGD(TAG, "Final NDEF message data (%u bytes): %s", data.size(), 
