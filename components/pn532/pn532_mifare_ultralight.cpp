@@ -120,7 +120,8 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
                                          uint8_t &message_start_index) {
   const uint8_t p4_offset = nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;  // page 4 will begin 4 bytes into the vector
   ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_");
-  ESP_LOGD(TAG, "Full page data (pages 3-6): %s", nfc::format_bytes(page_3_to_6).c_str());
+  std::vector<uint8_t> page_data_copy = page_3_to_6;  // Create a copy for logging
+  ESP_LOGD(TAG, "Full page data (pages 3-6): %s", nfc::format_bytes(page_data_copy).c_str());
   ESP_LOGD(TAG, "Page 4 data: %02X %02X %02X %02X", 
            page_3_to_6[p4_offset + 0], page_3_to_6[p4_offset + 1], 
            page_3_to_6[p4_offset + 2], page_3_to_6[p4_offset + 3]);
