@@ -68,15 +68,30 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   
   // we need to trim off page 3 as well as any bytes ahead of message_start_index
   // message_start_index is relative to start of page 4, so we add the page 4 offset
+  ESP_LOGD(TAG, "Before trimming: data size=%u, trim_offset=%u", data.size(), trim_offset);
+  
+  // Show some context around where we're trimming
+  if (data.size() >= trim_offset + 8 && trim_offset >= 4) {
+    std::vector<uint8_t> context_data(data.begin() + trim_offset - 4, data.begin() + trim_offset + 8);
+    ESP_LOGD(TAG, "Data around trim point: %s", nfc::format_bytes(context_data).c_str());
+  }
+  
   data.erase(data.begin(), data.begin() + trim_offset);
   
   // Also trim the data to the exact message length
   if (data.size() > message_length) {
     data.resize(message_length);
   }
+  
+  // Show the first few bytes of the NDEF message for debugging
+  ESP_LOGD(TAG, "First 16 bytes of NDEF message: %s", 
+           [&data]() {
+             std::vector<uint8_t> temp(data.begin(), data.begin() + std::min((size_t)16, data.size()));
+             return nfc::format_bytes(temp);
+           }().c_str());
 
   ESP_LOGD(TAG, "Final NDEF message data (%u bytes): %s", data.size(), 
-           data.size() <= 32 ? [&data]() { 
+           data.size() <= 64 ? [&data]() {  // Show more data for debugging
              std::vector<uint8_t> temp = data; 
              return nfc::format_bytes(temp); 
            }().c_str() : "too long to display");
@@ -142,6 +157,18 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
   ESP_LOGD(TAG, "Page 4 data: %02X %02X %02X %02X", 
            page_3_to_6[p4_offset + 0], page_3_to_6[p4_offset + 1], 
            page_3_to_6[p4_offset + 2], page_3_to_6[p4_offset + 3]);
+  
+  // Log page 5 and 6 data as well for better debugging
+  if (page_3_to_6.size() >= p4_offset + 8) {
+    ESP_LOGD(TAG, "Page 5 data: %02X %02X %02X %02X", 
+             page_3_to_6[p4_offset + 4], page_3_to_6[p4_offset + 5], 
+             page_3_to_6[p4_offset + 6], page_3_to_6[p4_offset + 7]);
+  }
+  if (page_3_to_6.size() >= p4_offset + 12) {
+    ESP_LOGD(TAG, "Page 6 data: %02X %02X %02X %02X", 
+             page_3_to_6[p4_offset + 8], page_3_to_6[p4_offset + 9], 
+             page_3_to_6[p4_offset + 10], page_3_to_6[p4_offset + 11]);
+  }
 
   if (!(page_3_to_6.size() > p4_offset + 5)) {
     return false;
