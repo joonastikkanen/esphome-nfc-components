@@ -89,6 +89,33 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
              std::vector<uint8_t> temp(data.begin(), data.begin() + std::min((size_t)16, data.size()));
              return nfc::format_bytes(temp);
            }().c_str());
+  
+  // Check if there's another TLV inside the message data
+  // Look for pattern like "xx xx xx xx 03 yy" where 03 is another NDEF TLV
+  for (size_t i = 0; i < data.size() - 1; i++) {
+    if (data[i] == 0x03 && i + 1 < data.size()) {
+      uint8_t inner_length = data[i + 1];
+      ESP_LOGD(TAG, "Found potential inner TLV at offset %u: 03 %02X (length %u)", i, inner_length, inner_length);
+      
+      // If this inner TLV has a reasonable length and would fit in our data
+      if (inner_length > 0 && inner_length < 100 && i + 2 + inner_length <= data.size()) {
+        ESP_LOGD(TAG, "Inner TLV seems valid, extracting from offset %u with length %u", i + 2, inner_length);
+        
+        // Extract the inner message
+        std::vector<uint8_t> inner_data(data.begin() + i + 2, data.begin() + i + 2 + inner_length);
+        
+        ESP_LOGD(TAG, "Inner NDEF message (%u bytes): %s", inner_data.size(), 
+                 inner_data.size() <= 64 ? [&inner_data]() {
+                   std::vector<uint8_t> temp = inner_data;
+                   return nfc::format_bytes(temp);
+                 }().c_str() : "too long to display");
+        
+        // Replace the current data with the inner message
+        data = inner_data;
+        break;
+      }
+    }
+  }
 
   ESP_LOGD(TAG, "Final NDEF message data (%u bytes): %s", data.size(), 
            data.size() <= 64 ? [&data]() {  // Show more data for debugging
