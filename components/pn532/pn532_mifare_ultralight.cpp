@@ -40,8 +40,28 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
       return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
     }
   }
+  
+  // Check if we have enough data to trim
+  uint32_t trim_offset = message_start_index + nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;
+  if (data.size() < trim_offset) {
+    ESP_LOGE(TAG, "Not enough data to trim: data size %u, trim offset %u", data.size(), trim_offset);
+    return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+  }
+  
+  // Check if we have enough data for the message
+  if (data.size() < trim_offset + message_length) {
+    ESP_LOGE(TAG, "Not enough data for message: data size %u, need %u", data.size(), trim_offset + message_length);
+    return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+  }
+  
   // we need to trim off page 3 as well as any bytes ahead of message_start_index
-  data.erase(data.begin(), data.begin() + message_start_index + nfc::MIFARE_ULTRALIGHT_PAGE_SIZE);
+  // message_start_index is relative to start of page 4, so we add the page 4 offset
+  data.erase(data.begin(), data.begin() + trim_offset);
+  
+  // Also trim the data to the exact message length
+  if (data.size() > message_length) {
+    data.resize(message_length);
+  }
 
   return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2, data);
 }
@@ -105,18 +125,28 @@ return false;
 if (page_3_to_6[p4_offset + 0] == 0x03) {
 
 if (page_3_to_6[p4_offset + 1] == 0xFF) {
-// dynamic length: byte 0 = 0x03; byte 1 = 0xFF; Length in byte 3 and 4
+// dynamic length: byte 0 = 0x03; byte 1 = 0xFF; Length in byte 2 and 3
+// Need to check if we have enough data for the length bytes
+if (page_3_to_6.size() < p4_offset + 4) {
+  ESP_LOGE(TAG, "Not enough data for dynamic length format");
+  return false;
+}
 message_length = page_3_to_6[p4_offset + 2] * 256 + page_3_to_6[p4_offset + 3];
 message_start_index = 4;
 ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1a");
 } else {
 // fixed length: byte 0 = 0x03; byte 1 = Length
-message_length = page_3_to_6[p4_offset + 2];
+message_length = page_3_to_6[p4_offset + 1];
 message_start_index = 2;
 ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b");
 }
 return true;
 } else if (page_3_to_6[p4_offset + 5] == 0x03) {
+// Need to check if we have enough data for the length byte
+if (page_3_to_6.size() < p4_offset + 7) {
+  ESP_LOGE(TAG, "Not enough data for NDEF TLV at offset 5");
+  return false;
+}
 message_length = page_3_to_6[p4_offset + 6];
 message_start_index = 7;
 ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE2");
@@ -145,7 +175,7 @@ bool PN532::write_mifare_ultralight_tag_(std::vector<uint8_t> &uid, nfc::NdefMes
   } else {
     encoded.insert(encoded.begin() + 1, 0xFF);
     encoded.insert(encoded.begin() + 2, (message_length >> 8) & 0xFF);
-    encoded.insert(encoded.begin() + 2, message_length & 0xFF);
+    encoded.insert(encoded.begin() + 3, message_length & 0xFF);
   }
   encoded.push_back(0xFE);
 
