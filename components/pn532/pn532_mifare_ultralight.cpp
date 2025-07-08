@@ -1,4 +1,5 @@
 #include <memory>
+#include <algorithm>
 
 #include "pn532.h"
 #include "esphome/core/log.h"
@@ -37,8 +38,14 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   const uint8_t read_length = message_length + message_start_index > 12 ? message_length + message_start_index - 12 : 0;
   ESP_LOGD(TAG, "Need to read additional %u bytes (message_length=%u, start_index=%u)", 
            read_length, message_length, message_start_index);
-  if (read_length) {
-    if (!this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, read_length, data)) {
+  
+  // For water meter tags, we often need to read much more data than the TLV indicates
+  // Let's read extra data to ensure we get the complete NDEF message
+  uint16_t extra_read_length = std::max(read_length, (uint16_t)200);  // Read at least 200 bytes
+  ESP_LOGD(TAG, "Reading extra data: %u bytes (original: %u)", extra_read_length, read_length);
+  
+  if (extra_read_length > 0) {
+    if (!this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, extra_read_length, data)) {
       ESP_LOGE(TAG, "Error reading tag data");
       return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
     }
@@ -94,6 +101,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   // Look for pattern like "xx xx xx xx 03 yy" where 03 is another NDEF TLV
   std::vector<uint8_t> combined_inner_data;
   bool found_inner_tlv = false;
+  uint32_t expected_total_size = 0;
   
   for (size_t i = 0; i < data.size() - 1; i++) {
     if (data[i] == 0x03 && i + 1 < data.size()) {
@@ -101,7 +109,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
       ESP_LOGD(TAG, "Found potential inner TLV at offset %u: 03 %02X (length %u)", i, inner_length, inner_length);
       
       // If this inner TLV has a reasonable length and would fit in our data
-      if (inner_length > 0 && inner_length < 100 && i + 2 + inner_length <= data.size()) {
+      if (inner_length > 0 && inner_length < 255 && i + 2 + inner_length <= data.size()) {
         ESP_LOGD(TAG, "Inner TLV seems valid, extracting from offset %u with length %u", i + 2, inner_length);
         
         // Extract the inner message
@@ -113,8 +121,8 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
                    return nfc::format_bytes(temp);
                  }().c_str() : "too long to display");
         
-        // Analyze the NDEF record structure
-        if (inner_data.size() >= 4) {
+        // Analyze the NDEF record structure (only for the first TLV)
+        if (!found_inner_tlv && inner_data.size() >= 4) {
           uint8_t flags = inner_data[0];
           uint8_t type_length = inner_data[1];
           ESP_LOGD(TAG, "NDEF record analysis: flags=0x%02X, type_length=%u", flags, type_length);
@@ -131,8 +139,15 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
               ESP_LOGD(TAG, "  Payload length: %u", payload_length);
               
               // The complete record should be: flags + type_length + payload_length + type + payload
-              uint32_t expected_size = 3 + type_length + payload_length;
-              ESP_LOGD(TAG, "  Expected total record size: %u, actual: %u", expected_size, inner_data.size());
+              expected_total_size = 3 + type_length + payload_length;
+              ESP_LOGD(TAG, "  Expected total record size: %u, actual: %u", expected_total_size, inner_data.size());
+              
+              // If the record is incomplete, we need to read more data
+              if (expected_total_size > inner_data.size()) {
+                ESP_LOGW(TAG, "  NDEF record is incomplete! Need %u more bytes", expected_total_size - inner_data.size());
+                // Mark this as an incomplete record - we'll need to read more data
+                // For now, let's try to work with what we have and see if we can get more data
+              }
             }
           }
         }
@@ -142,16 +157,23 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
           combined_inner_data = inner_data;
           found_inner_tlv = true;
         } else {
-          // Subsequent inner TLVs - append to the combined data
-          ESP_LOGD(TAG, "Appending additional inner TLV data");
+          // Subsequent inner TLVs - append to the combined data (this might be continuation)
+          ESP_LOGD(TAG, "Appending additional inner TLV data (%u bytes)", inner_data.size());
           combined_inner_data.insert(combined_inner_data.end(), inner_data.begin(), inner_data.end());
         }
+        
+        // Skip ahead to avoid re-processing this TLV
+        i += inner_length + 1;
       }
     }
   }
   
   if (found_inner_tlv) {
     ESP_LOGD(TAG, "Using combined inner TLV data (%u bytes)", combined_inner_data.size());
+    if (expected_total_size > 0 && combined_inner_data.size() >= expected_total_size) {
+      ESP_LOGD(TAG, "Trimming combined data to expected size: %u", expected_total_size);
+      combined_inner_data.resize(expected_total_size);
+    }
     data = combined_inner_data;
   }
 
