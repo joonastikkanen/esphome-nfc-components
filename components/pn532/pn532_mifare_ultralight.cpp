@@ -168,9 +168,24 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
       // not part of extended length format. Extended length format: 03 FF HH LL
       // But pattern like "03 FF 03 xx" suggests: TLV1=(03 FF) TLV2=(03 xx)
       if (potential_high_byte == 0x03) {
-        ESP_LOGD(TAG, "Byte after 0xFF is 0x03 - treating as new TLV, not extended length");
-        message_length = 255;  // Treat as regular 255-byte message
-        message_start_index = 2;
+        ESP_LOGD(TAG, "Byte after 0xFF is 0x03 - found second TLV, not extended length");
+        
+        // In this case, we likely have two TLVs: "03 FF" and "03 xx"
+        // The first TLV (03 FF) with 255 bytes is probably invalid or too large
+        // Let's try to use the second TLV (03 xx) instead
+        uint8_t second_tlv_length = potential_low_byte;
+        ESP_LOGD(TAG, "Second TLV length: %u bytes", second_tlv_length);
+        
+        // If the second TLV length seems more reasonable, use it
+        if (second_tlv_length > 0 && second_tlv_length <= 100) {
+          ESP_LOGD(TAG, "Using second TLV (length %u) instead of first TLV (255)", second_tlv_length);
+          message_length = second_tlv_length;
+          message_start_index = 4;  // Skip "03 FF 03", start at the data after the second TLV length
+        } else {
+          ESP_LOGD(TAG, "Second TLV length %u also seems invalid, falling back to first TLV (255)", second_tlv_length);
+          message_length = 255;
+          message_start_index = 2;
+        }
       } else {
         // Check if extended length makes sense
         uint16_t potential_length = potential_high_byte * 256 + potential_low_byte;
@@ -187,13 +202,12 @@ bool PN532::find_mifare_ultralight_ndef_(const std::vector<uint8_t> &page_3_to_6
         }
       }
       
-      // Additional sanity check: if 255 bytes seems too large for available data,
-      // maybe this tag has corrupted length information
-      if (message_length > 100) {  // 100 bytes is a reasonable upper limit for most tags
+      // Additional sanity check: if the chosen length seems too large, warn about it
+      if (message_length > 100) {
         ESP_LOGW(TAG, "Length %u seems large, tag may have corrupted length field", message_length);
       }
       
-      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b (255 bytes), length=%u", message_length);
+      ESP_LOGD(TAG, "MALOG: find_mifare_ultralight_ndef_: TRUE1b, length=%u", message_length);
 	} else {
       // fixed length: byte 0 = 0x03; byte 1 = Length
 	  message_length = page_3_to_6[p4_offset + 1];
