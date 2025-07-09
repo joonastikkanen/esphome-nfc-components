@@ -40,14 +40,65 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
            read_length, message_length, message_start_index);
   
   // For water meter tags, we often need to read much more data than the TLV indicates
-  // Let's read extra data to ensure we get the complete NDEF message
-  uint16_t extra_read_length = std::max((uint16_t)read_length, (uint16_t)200);  // Read at least 200 bytes
-  ESP_LOGD(TAG, "Reading extra data: %u bytes (original: %u)", extra_read_length, read_length);
+  // Let's try to read additional data in increments, starting with what we need
+  // Water meter tags can have data spread across many pages, so be more aggressive
+  uint16_t target_read_length = std::max((uint16_t)read_length, (uint16_t)400);  // Start with 400 bytes for complex tags
+  ESP_LOGD(TAG, "Target read length: %u bytes (original: %u)", target_read_length, read_length);
   
-  if (extra_read_length > 0) {
-    if (!this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, extra_read_length, data)) {
-      ESP_LOGE(TAG, "Error reading tag data");
-      return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+  if (target_read_length > 0) {
+    // Try to read the target length first
+    if (!this->read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, target_read_length, data)) {
+      ESP_LOGW(TAG, "Failed to read %u bytes, trying chunked reading", target_read_length);
+      
+      // Reset data to initial 16 bytes and try chunked reading
+      data.resize(16);
+      
+      // Try reading in chunks, accumulating data
+      std::vector<uint16_t> chunk_sizes = {32, 16, 8};  // Start with smaller chunks that are more likely to work
+      bool success = false;
+      
+      for (uint16_t chunk_size : chunk_sizes) {
+        ESP_LOGD(TAG, "Trying chunked reading with %u byte chunks", chunk_size);
+        
+        uint16_t bytes_read = 0;
+        uint8_t current_page = nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3;
+        data.resize(16);  // Reset to initial pages 3-6
+        
+        while (bytes_read < target_read_length) {
+          uint16_t bytes_to_read = std::min(chunk_size, (uint16_t)(target_read_length - bytes_read));
+          std::vector<uint8_t> chunk_data;
+          
+          if (!this->read_mifare_ultralight_bytes_(current_page, bytes_to_read, chunk_data)) {
+            ESP_LOGW(TAG, "Failed to read chunk of %u bytes at page %u", bytes_to_read, current_page);
+            // If we've already read some data, we can continue with what we have
+            if (bytes_read > 0) {
+              ESP_LOGD(TAG, "Continuing with %u bytes already read", bytes_read);
+              success = true;
+            }
+            break;
+          }
+          
+          data.insert(data.end(), chunk_data.begin(), chunk_data.end());
+          bytes_read += chunk_data.size();
+          current_page += (chunk_data.size() + nfc::MIFARE_ULTRALIGHT_PAGE_SIZE - 1) / nfc::MIFARE_ULTRALIGHT_PAGE_SIZE;
+          
+          ESP_LOGD(TAG, "Read chunk: %u bytes, total read: %u/%u", chunk_data.size(), bytes_read, target_read_length);
+        }
+        
+        // Consider it successful if we've read at least what we originally needed or 100 bytes
+        if (bytes_read >= std::min(target_read_length, (uint16_t)100) || success) {
+          if (!success) {
+            success = true;
+            ESP_LOGD(TAG, "Successfully read %u bytes using %u byte chunks (partial)", bytes_read, chunk_size);
+          }
+          break;
+        }
+      }
+      
+      if (!success) {
+        ESP_LOGE(TAG, "Failed to read additional data from tag with all chunk sizes");
+        return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+      }
     }
     ESP_LOGD(TAG, "After additional read, data size: %u", data.size());
   }
