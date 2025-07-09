@@ -42,7 +42,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   // For water meter tags, we often need to read much more data than the TLV indicates
   // Let's try to read additional data in increments, starting with what we need
   // Water meter tags can have data spread across many pages, so be more aggressive
-  uint16_t target_read_length = std::max((uint16_t)read_length, (uint16_t)100);  // Start with 100 bytes for complex tags
+  uint16_t target_read_length = std::max((uint16_t)read_length, (uint16_t)200);  // Start with 200 bytes for complex tags
   ESP_LOGD(TAG, "Target read length: %u bytes (original: %u)", target_read_length, read_length);
   
   if (target_read_length > 0) {
@@ -85,8 +85,8 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
           ESP_LOGD(TAG, "Read chunk: %u bytes, total read: %u/%u", chunk_data.size(), bytes_read, target_read_length);
         }
         
-        // Consider it successful if we've read at least what we originally needed or 50 bytes
-        if (bytes_read >= std::min(target_read_length, (uint16_t)50) || success) {
+        // Consider it successful if we've read at least what we originally needed or 100 bytes
+        if (bytes_read >= std::min(target_read_length, (uint16_t)100) || success) {
           if (!success) {
             success = true;
             ESP_LOGD(TAG, "Successfully read %u bytes using %u byte chunks (partial)", bytes_read, chunk_size);
@@ -327,12 +327,62 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
     ESP_LOGD(TAG, "Using combined inner TLV data (%u bytes)", combined_inner_data.size());
     
     // For water meter tags, we often have all the data we need in the first few pages
-    // If we detected an incomplete NDEF record but couldn't read more data, 
-    // try to work with what we have
+    // If we detected an incomplete NDEF record, try to read more data if possible
     if (expected_total_size > 0 && combined_inner_data.size() < expected_total_size) {
-      ESP_LOGW(TAG, "NDEF record incomplete: have %u bytes, need %u", 
-               combined_inner_data.size(), expected_total_size);
-      ESP_LOGW(TAG, "Working with partial NDEF record - this may be sufficient for basic decoding");
+      uint32_t bytes_needed = expected_total_size - combined_inner_data.size();
+      ESP_LOGW(TAG, "NDEF record incomplete: have %u bytes, need %u (missing %u bytes)", 
+               combined_inner_data.size(), expected_total_size, bytes_needed);
+      
+      // Try to read more data if we haven't read enough yet
+      if (data.size() < 200) {
+        ESP_LOGD(TAG, "Attempting to read more data to complete NDEF record");
+        
+        // Try to read additional pages to get the complete record
+        uint16_t additional_read = bytes_needed + 50;  // Read extra to be safe
+        std::vector<uint8_t> expanded_data = data;
+        
+        // Calculate starting page based on how much data we already have
+        uint8_t start_page = nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + (data.size() / nfc::MIFARE_ULTRALIGHT_PAGE_SIZE);
+        
+        if (this->read_mifare_ultralight_bytes_(start_page, additional_read, expanded_data)) {
+          ESP_LOGD(TAG, "Successfully read %u additional bytes, total data now: %u", 
+                   expanded_data.size() - data.size(), expanded_data.size());
+          
+          // Look for the complete NDEF record in the expanded data
+          bool found_complete_record = false;
+          
+          // Search for the same NDEF record pattern in the expanded data
+          for (size_t i = 0; i < expanded_data.size() - 3; i++) {
+            uint8_t potential_flags = expanded_data[i];
+            if ((potential_flags & 0x07) <= 0x06 && (potential_flags & 0x10) != 0 && i + 3 < expanded_data.size()) {
+              uint8_t type_length = expanded_data[i + 1];
+              uint8_t payload_length = expanded_data[i + 2];
+              
+              if (type_length <= 8 && payload_length > 0 && payload_length < 200) {
+                uint32_t complete_size = 3 + type_length + payload_length;
+                if (complete_size == expected_total_size && i + complete_size <= expanded_data.size()) {
+                  ESP_LOGD(TAG, "Found complete NDEF record at offset %u with %u bytes in expanded data", i, complete_size);
+                  combined_inner_data = std::vector<uint8_t>(expanded_data.begin() + i, expanded_data.begin() + i + complete_size);
+                  found_complete_record = true;
+                  break;
+                }
+              }
+            }
+          }
+          
+          if (!found_complete_record) {
+            ESP_LOGW(TAG, "Still couldn't find complete NDEF record in expanded data");
+          }
+        } else {
+          ESP_LOGW(TAG, "Failed to read additional data from tag");
+        }
+      } else {
+        ESP_LOGW(TAG, "Already read sufficient data, working with partial NDEF record");
+      }
+      
+      if (combined_inner_data.size() < expected_total_size) {
+        ESP_LOGW(TAG, "Working with partial NDEF record - this may be sufficient for basic decoding");
+      }
     }
     
     // Don't trim to expected size if we have partial data - use what we have
@@ -344,7 +394,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   }
 
   ESP_LOGD(TAG, "Final NDEF message data (%u bytes): %s", data.size(), 
-           data.size() <= 64 ? [&data]() {  // Show more data for debugging
+           data.size() <= 100 ? [&data]() {  // Show more data for debugging
              std::vector<uint8_t> temp = data; 
              return nfc::format_bytes(temp); 
            }().c_str() : "too long to display");
