@@ -238,9 +238,10 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
                  data.size(), available_data);
         
         // Show more of the data for debugging
+        std::vector<uint8_t> debug_context(data.begin() + record_start, 
+                                          data.begin() + std::min(record_start + 32, data.size()));
         ESP_LOGD(TAG, "Data around record start (offset %u): %s", record_start,
-                 nfc::format_bytes(std::vector<uint8_t>(data.begin() + record_start, 
-                                                  data.begin() + std::min(record_start + 32, data.size()))).c_str());
+                 nfc::format_bytes(debug_context).c_str());
       } else {
         ESP_LOGW(TAG, "Failed to read additional data for complete NDEF record");
         
@@ -300,9 +301,10 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
     ESP_LOGD(TAG, "Extracted %u bytes of direct NDEF record data", combined_inner_data.size());
     
     // Log the extracted data for debugging
+    std::vector<uint8_t> debug_data(combined_inner_data.begin(), 
+                                   combined_inner_data.begin() + std::min((size_t)32, combined_inner_data.size()));
     ESP_LOGD(TAG, "Direct NDEF record data (first 32 bytes): %s", 
-             nfc::format_bytes(std::vector<uint8_t>(combined_inner_data.begin(), 
-                                              combined_inner_data.begin() + std::min((size_t)32, combined_inner_data.size()))).c_str());
+             nfc::format_bytes(debug_data).c_str());
     
     // Check if we have the complete record now
     if (expected_total_size > 0 && combined_inner_data.size() < expected_total_size) {
