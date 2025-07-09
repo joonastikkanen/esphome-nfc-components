@@ -41,7 +41,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   
   // For water meter tags, we often need to read much more data than the TLV indicates
   // Let's read extra data to ensure we get the complete NDEF message
-  uint16_t extra_read_length = std::max(read_length, (uint16_t)200);  // Read at least 200 bytes
+  uint16_t extra_read_length = std::max((uint16_t)read_length, (uint16_t)200);  // Read at least 200 bytes
   ESP_LOGD(TAG, "Reading extra data: %u bytes (original: %u)", extra_read_length, read_length);
   
   if (extra_read_length > 0) {
