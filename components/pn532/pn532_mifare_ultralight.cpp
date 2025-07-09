@@ -154,73 +154,205 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(std::vector<uint
   bool found_inner_tlv = false;
   uint32_t expected_total_size = 0;
   
-  for (size_t i = 0; i < data.size() - 1; i++) {
-    if (data[i] == 0x03 && i + 1 < data.size()) {
-      uint8_t inner_length = data[i + 1];
-      ESP_LOGD(TAG, "Found potential inner TLV at offset %u: 03 %02X (length %u)", i, inner_length, inner_length);
+  // Also look for direct NDEF record patterns (starting with flags like 0x54, 0xD1, etc.)
+  // These indicate the start of an actual NDEF record
+  std::vector<size_t> ndef_record_starts;
+  
+  for (size_t i = 0; i < data.size() - 3; i++) {
+    uint8_t potential_flags = data[i];
+    // Check for common NDEF record flag patterns
+    if ((potential_flags & 0x07) <= 0x06 && // TNF field should be 0-6
+        (potential_flags & 0x10) != 0 &&     // SR (Short Record) bit should be set for short records
+        i + 3 < data.size()) {               // Make sure we have enough data for header
       
-      // If this inner TLV has a reasonable length and would fit in our data
-      if (inner_length > 0 && inner_length < 255 && i + 2 + inner_length <= data.size()) {
-        ESP_LOGD(TAG, "Inner TLV seems valid, extracting from offset %u with length %u", i + 2, inner_length);
+      uint8_t type_length = data[i + 1];
+      uint8_t payload_length = data[i + 2];
+      
+      // Validate that this looks like a reasonable NDEF record
+      if (type_length <= 8 && payload_length > 0 && payload_length < 200) {
+        ESP_LOGD(TAG, "Found potential NDEF record at offset %u: flags=0x%02X, type_len=%u, payload_len=%u", 
+                 i, potential_flags, type_length, payload_length);
+        ndef_record_starts.push_back(i);
         
-        // Extract the inner message
-        std::vector<uint8_t> inner_data(data.begin() + i + 2, data.begin() + i + 2 + inner_length);
+        // Calculate expected total size for this record
+        uint32_t expected_size = 3 + type_length + payload_length;
+        if (expected_total_size == 0) {
+          expected_total_size = expected_size;
+          ESP_LOGD(TAG, "Setting expected total size to %u based on NDEF record", expected_size);
+        }
+      }
+    }
+  }
+  
+  // If we found direct NDEF record patterns, use the first one
+  if (!ndef_record_starts.empty()) {
+    size_t record_start = ndef_record_starts[0];
+    ESP_LOGD(TAG, "Using direct NDEF record starting at offset %u", record_start);
+    
+    // Extract as much data as we can from the record start
+    size_t available_data = data.size() - record_start;
+    size_t data_to_extract = std::min(available_data, (size_t)expected_total_size);
+    
+    combined_inner_data = std::vector<uint8_t>(data.begin() + record_start, 
+                                              data.begin() + record_start + data_to_extract);
+    found_inner_tlv = true;
+    
+    ESP_LOGD(TAG, "Extracted %u bytes of direct NDEF record data", combined_inner_data.size());
+    
+    // If we still don't have enough data, we need to read more from the tag
+    if (combined_inner_data.size() < expected_total_size) {
+      ESP_LOGW(TAG, "Direct NDEF record is incomplete: have %u bytes, need %u", 
+               combined_inner_data.size(), expected_total_size);
+    }
+  } else {
+    // Fall back to TLV-based approach
+    ESP_LOGD(TAG, "No direct NDEF record found, using TLV-based approach");
+    
+    // First, find all potential TLVs in the data
+    struct TlvInfo {
+      size_t offset;
+      uint8_t length;
+      std::vector<uint8_t> data;
+    };
+    std::vector<TlvInfo> found_tlvs;
+    
+    for (size_t i = 0; i < data.size() - 1; i++) {
+      if (data[i] == 0x03 && i + 1 < data.size()) {
+        uint8_t inner_length = data[i + 1];
+        ESP_LOGD(TAG, "Found potential inner TLV at offset %u: 03 %02X (length %u)", i, inner_length, inner_length);
         
-        ESP_LOGD(TAG, "Inner NDEF message (%u bytes): %s", inner_data.size(), 
-                 inner_data.size() <= 64 ? [&inner_data]() {
-                   std::vector<uint8_t> temp = inner_data;
-                   return nfc::format_bytes(temp);
-                 }().c_str() : "too long to display");
-        
-        // Analyze the NDEF record structure (only for the first TLV)
-        if (!found_inner_tlv && inner_data.size() >= 4) {
-          uint8_t flags = inner_data[0];
-          uint8_t type_length = inner_data[1];
-          ESP_LOGD(TAG, "NDEF record analysis: flags=0x%02X, type_length=%u", flags, type_length);
-          ESP_LOGD(TAG, "  MB=%u, ME=%u, CF=%u, SR=%u, IL=%u, TNF=%u", 
-                   (flags >> 7) & 1, (flags >> 6) & 1, (flags >> 5) & 1, 
-                   (flags >> 4) & 1, (flags >> 3) & 1, flags & 7);
+        // If this inner TLV has a reasonable length and would fit in our data
+        if (inner_length > 0 && inner_length < 255 && i + 2 + inner_length <= data.size()) {
+          ESP_LOGD(TAG, "Inner TLV seems valid, extracting from offset %u with length %u", i + 2, inner_length);
           
-          // Check if this is a short record (SR=1)
-          bool is_short_record = (flags & 0x10) != 0;
-          if (is_short_record) {
-            ESP_LOGD(TAG, "  Short record format detected");
-            if (inner_data.size() >= 3) {
-              uint8_t payload_length = inner_data[2];
-              ESP_LOGD(TAG, "  Payload length: %u", payload_length);
+          // Extract the inner message
+          std::vector<uint8_t> inner_data(data.begin() + i + 2, data.begin() + i + 2 + inner_length);
+          
+          ESP_LOGD(TAG, "Inner NDEF message (%u bytes): %s", inner_data.size(), 
+                   inner_data.size() <= 64 ? [&inner_data]() {
+                     std::vector<uint8_t> temp = inner_data;
+                     return nfc::format_bytes(temp);
+                   }().c_str() : "too long to display");
+          
+          // Store this TLV info
+          found_tlvs.push_back({i, inner_length, inner_data});
+          
+          // Analyze the NDEF record structure (only for the first TLV that looks like an NDEF record)
+          if (!found_inner_tlv && inner_data.size() >= 4) {
+            uint8_t flags = inner_data[0];
+            uint8_t type_length = inner_data[1];
+            
+            // Check if this looks like a valid NDEF record
+            if ((flags & 0x07) <= 0x06 && type_length <= 8) {
+              ESP_LOGD(TAG, "NDEF record analysis: flags=0x%02X, type_length=%u", flags, type_length);
+              ESP_LOGD(TAG, "  MB=%u, ME=%u, CF=%u, SR=%u, IL=%u, TNF=%u", 
+                       (flags >> 7) & 1, (flags >> 6) & 1, (flags >> 5) & 1, 
+                       (flags >> 4) & 1, (flags >> 3) & 1, flags & 7);
               
-              // The complete record should be: flags + type_length + payload_length + type + payload
-              expected_total_size = 3 + type_length + payload_length;
-              ESP_LOGD(TAG, "  Expected total record size: %u, actual: %u", expected_total_size, inner_data.size());
-              
-              // If the record is incomplete, we need to read more data
-              if (expected_total_size > inner_data.size()) {
-                ESP_LOGW(TAG, "  NDEF record is incomplete! Need %u more bytes", expected_total_size - inner_data.size());
-                // Mark this as an incomplete record - we'll need to read more data
-                // For now, let's try to work with what we have and see if we can get more data
+              // Check if this is a short record (SR=1)
+              bool is_short_record = (flags & 0x10) != 0;
+              if (is_short_record) {
+                ESP_LOGD(TAG, "  Short record format detected");
+                if (inner_data.size() >= 3) {
+                  uint8_t payload_length = inner_data[2];
+                  ESP_LOGD(TAG, "  Payload length: %u", payload_length);
+                  
+                  // The complete record should be: flags + type_length + payload_length + type + payload
+                  expected_total_size = 3 + type_length + payload_length;
+                  ESP_LOGD(TAG, "  Expected total record size: %u, actual: %u", expected_total_size, inner_data.size());
+                  
+                  // If the record is incomplete, we need to read more data
+                  if (expected_total_size > inner_data.size()) {
+                    ESP_LOGW(TAG, "  NDEF record is incomplete! Need %u more bytes", expected_total_size - inner_data.size());
+                  }
+                }
               }
             }
           }
+          
+          // Skip ahead to avoid re-processing this TLV
+          i += inner_length + 1;
         }
+      }
+    }
+    
+    // Now combine the TLVs to try to get a complete NDEF record
+    if (!found_tlvs.empty()) {
+      ESP_LOGD(TAG, "Found %u inner TLVs, attempting to combine", found_tlvs.size());
+      
+      // Start with the first TLV
+      combined_inner_data = found_tlvs[0].data;
+      found_inner_tlv = true;
+      
+      // If we have an incomplete record and multiple TLVs, try to combine them
+      if (expected_total_size > combined_inner_data.size() && found_tlvs.size() > 1) {
+        ESP_LOGD(TAG, "Attempting to combine TLVs to reach expected size %u", expected_total_size);
         
-        if (!found_inner_tlv) {
-          // First inner TLV found - use it as the base
-          combined_inner_data = inner_data;
-          found_inner_tlv = true;
-        } else {
-          // Subsequent inner TLVs - append to the combined data (this might be continuation)
-          ESP_LOGD(TAG, "Appending additional inner TLV data (%u bytes)", inner_data.size());
-          combined_inner_data.insert(combined_inner_data.end(), inner_data.begin(), inner_data.end());
+        for (size_t tlv_idx = 1; tlv_idx < found_tlvs.size(); tlv_idx++) {
+          const auto& tlv = found_tlvs[tlv_idx];
+          ESP_LOGD(TAG, "Appending TLV %u data (%u bytes)", tlv_idx, tlv.data.size());
+          combined_inner_data.insert(combined_inner_data.end(), tlv.data.begin(), tlv.data.end());
+          
+          // Check if we've reached the expected size
+          if (combined_inner_data.size() >= expected_total_size) {
+            ESP_LOGD(TAG, "Reached expected size %u with %u TLVs", expected_total_size, tlv_idx + 1);
+            break;
+          }
         }
-        
-        // Skip ahead to avoid re-processing this TLV
-        i += inner_length + 1;
       }
     }
   }
   
   if (found_inner_tlv) {
     ESP_LOGD(TAG, "Using combined inner TLV data (%u bytes)", combined_inner_data.size());
+    
+    // If we detected an incomplete NDEF record, try to read more data from the tag
+    if (expected_total_size > 0 && combined_inner_data.size() < expected_total_size) {
+      uint32_t bytes_needed = expected_total_size - combined_inner_data.size();
+      ESP_LOGW(TAG, "NDEF record incomplete, need %u more bytes. Attempting to read more data...", bytes_needed);
+      
+      // Try to read more data from the tag to complete the record
+      std::vector<uint8_t> additional_data = data;  // Start with current data
+      uint16_t additional_read = std::min((uint32_t)400, bytes_needed * 2);  // Read extra to be safe
+      
+      // Calculate starting page based on how much data we already have
+      uint8_t start_page = nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + (data.size() / nfc::MIFARE_ULTRALIGHT_PAGE_SIZE);
+      
+      if (this->read_mifare_ultralight_bytes_(start_page, additional_read, additional_data)) {
+        ESP_LOGD(TAG, "Successfully read %u additional bytes, total data now: %u", 
+                 additional_data.size() - data.size(), additional_data.size());
+        
+        // Re-process the data to find the complete NDEF record
+        data = additional_data;
+        
+        // Look for the NDEF record again in the expanded data
+        bool found_complete_record = false;
+        for (size_t i = 0; i < data.size() - 3; i++) {
+          uint8_t potential_flags = data[i];
+          if ((potential_flags & 0x07) <= 0x06 && (potential_flags & 0x10) != 0 && i + 3 < data.size()) {
+            uint8_t type_length = data[i + 1];
+            uint8_t payload_length = data[i + 2];
+            
+            if (type_length <= 8 && payload_length > 0 && payload_length < 200) {
+              uint32_t complete_size = 3 + type_length + payload_length;
+              if (i + complete_size <= data.size()) {
+                ESP_LOGD(TAG, "Found complete NDEF record at offset %u with %u bytes", i, complete_size);
+                combined_inner_data = std::vector<uint8_t>(data.begin() + i, data.begin() + i + complete_size);
+                found_complete_record = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        if (!found_complete_record) {
+          ESP_LOGW(TAG, "Still couldn't find complete NDEF record after reading more data");
+        }
+      } else {
+        ESP_LOGW(TAG, "Failed to read additional data from tag");
+      }
+    }
+    
     if (expected_total_size > 0 && combined_inner_data.size() >= expected_total_size) {
       ESP_LOGD(TAG, "Trimming combined data to expected size: %u", expected_total_size);
       combined_inner_data.resize(expected_total_size);
