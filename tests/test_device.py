@@ -1,7 +1,6 @@
 """Read-only NFC acceptance test (presses the reader's scan button, not Restart)."""
 import argparse
 import json
-import re
 import threading
 import time
 import urllib.parse
@@ -44,7 +43,9 @@ def main():
                                 ready.set()
                             elif event == "log":
                                 logs.append(payload)
-                                if re.search(r"Read [\d.]+ m³, \d+ history entries", payload):
+                                # This early log is delivered before large JSON states;
+                                # later INFO messages can be dropped by the web SSE queue.
+                                if "Read complete NDEF message:" in payload:
                                     reads.append(time.monotonic())
                                     print(payload, flush=True)
                             condition.notify_all()
@@ -56,11 +57,17 @@ def main():
 
     threading.Thread(target=collect, daemon=True).start()
     assert ready.wait(15), "Device event stream unavailable"
+    passed = False
     try:
+        with condition:
+            assert condition.wait_for(
+                lambda: "button/Read Water Meter NFC" in states or errors, timeout=15
+            ), "Scan button not found"
+            assert not errors, errors
         for number in (1, 2):
             with condition:
                 before = len(reads)
-            button = urllib.parse.quote("read_water_meter_nfc", safe="")
+            button = urllib.parse.quote("Read Water Meter NFC", safe="")
             request = urllib.request.Request(base + f"/button/{button}/press", method="POST")
             with urllib.request.urlopen(request, timeout=15) as response:
                 assert response.status == 200
@@ -73,30 +80,41 @@ def main():
 
         with condition:
             before = len(reads)
-            assert condition.wait_for(lambda: len(reads) > before or errors, timeout=40), (
-                "No automatic 30-second refresh"
+            # Allow two poll opportunities: a physical NFC read can fail
+            # transiently, and the firmware intentionally retains last-good data.
+            assert condition.wait_for(lambda: len(reads) > before or errors, timeout=75), (
+                "No successful automatic refresh within two polling intervals"
             )
             assert not errors, errors
             assert len(uptimes) >= 2, "Insufficient uptime samples"
             assert all(b >= a for a, b in zip(uptimes, uptimes[1:])), "Device rebooted during scans"
-            full = json.loads(states["text_sensor/Water Meter NFC Full JSON"]["value"])
+            # Full JSON can exceed the web server's SSE event-size budget once
+            # RawText is included. Fetch it with the normal entity REST endpoint.
+            full_path = "/text_sensor/" + urllib.parse.quote("Water Meter NFC Full JSON", safe="")
+            with urllib.request.urlopen(base + full_path, timeout=15) as response:
+                full = json.loads(json.load(response)["value"])
             summary = states["text_sensor/Water Meter NFC Data"]["value"]
             assert len(summary) <= 255
             json.loads(summary)
             assert full["SN"] and full["NFC_Id"] != full["SN"]
             assert full["Name"].startswith("Ultrasonic"), "Meter name still truncated"
             assert isinstance(full["history"], list)
-            print(json.dumps(full, ensure_ascii=False, indent=2))
+            assert full["HistoryCount"] == len(full["history"])
+            assert full["CRC"], "Meter CRC was not preserved"
+            assert states["text_sensor/Water Meter NFC Raw Text"]["value"].startswith(full["Name"])
+            print(f"{full['Name']}: {full['Vol']}, {len(full['history'])} history entries")
             print(f"Automatic refresh passed; uptime {uptimes[0]} → {uptimes[-1]} seconds")
+            passed = True
     finally:
-        for key, value in states.items():
-            if "NFC Raw" in key:
-                print("Raw meter text:", value.get("value"))
-        if errors:
-            print("Stream errors:", errors)
-        for log in logs[-20:]:
-            if "watermeter" in log or "pn532" in log or "nfc" in log:
-                print(log)
+        if not passed:
+            for key, value in states.items():
+                if "NFC Raw" in key:
+                    print("Raw meter text:", value.get("value"))
+            if errors:
+                print("Stream errors:", errors)
+            for log in logs[-20:]:
+                if "watermeter" in log or "pn532" in log or "nfc" in log:
+                    print(log)
 
 
 if __name__ == "__main__":

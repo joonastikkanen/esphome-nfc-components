@@ -17,6 +17,9 @@ esp32:
     type: arduino
 
 api:
+  # The reader publishes full JSON via HA's mqtt.publish action; no broker
+  # credentials are stored on the ESP32. Enable HA's allow_service_calls option.
+  homeassistant_services: true
   encryption:
     key: !secret watermeter_api_key
 
@@ -107,6 +110,20 @@ text_sensor:
     id: water_meter_full_json
     internal: true
     update_interval: never
+    on_value:
+      - homeassistant.action:
+          action: mqtt.publish
+          data:
+            topic: watermeter-nfc-reader/nfc/full
+            # The web entity keeps raw text separate to stay below ESPHome's
+            # 5120-byte serialized HTTP response cap (state/value duplicate it).
+            # MQTT attributes still receive the complete raw text as well.
+            payload: !lambda |-
+              if (x.empty() || x.back() != '}') return std::string();
+              return x.substr(0, x.size() - 1) + ",\"RawText\":" +
+                     watermeter::quote(id(water_meter_raw).state) + "}";
+            retain: "true"
+            qos: "1"
   - platform: template
     name: Water Meter NFC Raw Text
     id: water_meter_raw
@@ -144,7 +161,7 @@ pn532_i2c:
             ESP_LOGW("watermeter", "Missing serial or invalid volume; retaining last good reading");
             return;
           }
-          const auto full = reading.json(x, tag.get_tag_type());
+          const auto full = reading.json(x, tag.get_tag_type(), true, false);
           const auto summary = reading.json(x, tag.get_tag_type(), false);
           id(water_meter_full_json).publish_state(full);
           if (summary.size() <= 255)

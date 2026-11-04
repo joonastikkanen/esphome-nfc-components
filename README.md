@@ -6,8 +6,10 @@ Original discussion: https://community.home-assistant.io/t/water-meter-reading-v
 
 ## Watermeter NFC Reader
 
-Prepared replacement configuration and patched external components. **Not installed
-on the device or saved to the live ESPHome dashboard.**
+Patched configuration and external components. **Built and installed by OTA on
+2026-11-04; manual and automatic rereads verified without rebooting.** The live
+ESPHome dashboard's configuration/components have not been synchronized; do not
+reinstall its old configuration over this firmware.
 
 ## Findings from the live device
 
@@ -38,9 +40,10 @@ Code inspection found:
 6. Two external sources register the same components; which source is selected
    should not depend on ordering. The replacement uses only the local source.
 
-The byte-level cause of the missing initial `U`, and whether this particular
-meter actually supplies history, still need verification after a patched read.
-No missing data is invented or repaired by adding guessed characters.
+The patched read recovered the complete name and **28 history entries** from a
+**929-byte NDEF message** (919-byte text). No missing data is invented or repaired
+by adding guessed characters. The original driver was losing data before JSON
+conversion.
 
 ## Replacement behavior
 
@@ -51,7 +54,7 @@ No missing data is invented or repaired by adding guessed characters.
   incomplete/unsupported memory layouts instead of emitting partial data.
 - Type 2 write/format/clean operations are disabled in this watermeter driver.
 - All supported NDEF text records are parsed; CRLF, LF, CR, and a final line
-  without a newline are handled. CRC metadata is excluded, not verified.
+  without a newline are handled. CRC metadata is preserved, not verified.
 - Bad volume/serial reads retain the last good published reading.
 - `Water Meter NFC Data` remains a compact HA JSON entity with `SN`, physical
   tag `NFC_Id`, `Time`, `Vol`, and `HistoryCount`. **Its schema differs from
@@ -60,6 +63,48 @@ No missing data is invented or repaired by adding guessed characters.
   entities visible through the device web server (`include_internal: true`).
   They are not oversized HA entity states. The existing unauthenticated web
   server now exposes this diagnostic data to clients on the device network.
+- **`sensor.watermeter_nfc_reader_nfc_full_data`** exposes the complete document
+  as Home Assistant attributes through MQTT Discovery. Its short state is the
+  meter's timestamp. Attributes include `Name`, `SN`, `NFC_Id`, `NFC_Typ`, `Time`,
+  `Vol`, `KDate`, `KVol`, `Temp`, `FVol`, `RVol`, `Battery`, `FW`, `CRC`, `history`,
+  `HistoryCount`, and `RawText`. Unrecognized future key/value fields are retained
+  too, and `RawText` preserves the original decoded text without dropping lines.
+- The ESP32 uses its encrypted native API to request HA's `mqtt.publish` action;
+  it holds **no MQTT broker credentials**. This requires the reader integration's
+  `allow_service_calls` option, explicitly approved and enabled during deployment.
+  HA and its MQTT integration must be running for full-data attributes to update;
+  local reads and existing native ESPHome sensors work independently.
+- On the device web server, full parsed JSON and raw text remain separate:
+  ESPHome caps serialized HTTP responses at 5120 bytes and duplicates text states
+  into both `value` and `state`. The MQTT/HA document combines them without that
+  web-response limit, so HA still receives the complete `RawText` attribute.
+- The full-data MQTT state/discovery are retained. The entity becomes unavailable
+  after 120 seconds without a publish. No unrelated MQTT entities are discovered.
+
+## Home Assistant full-data setup
+
+Already deployed on this installation. For another installation:
+
+1. Enable **Allow the device to perform Home Assistant actions** in this reader's
+   ESPHome integration options. This is a broad permission for the trusted reader,
+   not a per-service allowlist. Leave other devices unchanged.
+2. Ensure HA's MQTT integration is connected to your broker.
+3. Publish the contents of `homeassistant/mqtt-discovery.json` as a retained
+   `mqtt.publish` payload to
+   `homeassistant/sensor/watermeter_nfc_reader/full_data/config` (QoS 1).
+   Adapt the MAC, identifiers and unique ID before using it with another reader.
+4. Install this firmware. A valid NFC read publishes its complete JSON to
+   `watermeter-nfc-reader/nfc/full`. Check the resulting full-data entity's
+   attributes, not only its short state. Example:
+
+   ```jinja
+   {{ state_attr('sensor.watermeter_nfc_reader_nfc_full_data', 'history') }}
+   ```
+
+To remove the bridge, remove the `on_value` HA action from the full-JSON sensor,
+disable `allow_service_calls` again, and publish empty retained payloads to the
+discovery and data topics above. The original summary/volume entities are not
+renamed or replaced by this bridge.
 
 This driver supports contiguous Type 2 memory, UTF-8 text, and one-byte page
 addresses (up to 1008 data bytes). Reserved-memory/lock-control TLV layouts,
@@ -112,9 +157,33 @@ tests/run_tests.py` to avoid an inherited libc/library mismatch.
   partial physical reads, oversized lengths, and unsupported memory layouts.
 - ESPHome **2026.10.2** config validation passed using dummy secrets in a
   separate temporary directory; C++ generation also completed.
-- Full firmware compilation was blocked before application compilation by
-  NixOS refusing the generic dynamically linked ESP-IDF tool executables.
-  Firmware build and on-device verification are still required.
+- Full firmware compilation succeeded in an FHS environment on NixOS:
+
+  ```sh
+  nix shell nixpkgs#steam-run-free --command steam-run \
+    "$PWD/.venv/bin/python" -m esphome compile watermeter-nfc-reader.yaml
+  ```
+
+  The local `.venv` contains ESPHome 2026.10.2. The full-data image uses 1,034,512
+  bytes (56.4% of the application partition), and static RAM usage is 33.6%.
+- OTA installation succeeded at `10.20.30.23`, latest config hash `24056ef4`.
+- `python tests/test_device.py 10.20.30.23` passed: two manual rereads, an
+  automatic refresh, full JSON parsing, CRC preservation, and uptime increasing
+  from 106 to 144 seconds without restarting on the final firmware. Volume had
+  increased to `203.051 m³`, confirming fresh data rather than just cached output.
+- Home Assistant was checked directly: its NFC summary is valid and ends in
+  `"HistoryCount":28}`. The full-data entity has all 28 history records, every
+  other decoded field, CRC `21284`, and the complete original `RawText`.
+- Initial reads reported timestamp `2026-11-04 13:11` and volume `203.045 m³`;
+  later HA data updated to meter timestamp `2026-11-04 14:00`. These are the
+  meter's values, not the time of the most recent reader scan.
+- Every key/value line, CRC, and all 28 dated entries in HA's `RawText` were
+  compared against the entity's structured attributes: no fields were missing.
+- A transient incomplete NFC read was observed; it correctly retained last-good
+  data instead of publishing truncated JSON. The acceptance test permits two
+  automatic polling opportunities to account for physical RF read failures.
+- A full read takes about 1.9 seconds in the existing synchronous PN532 driver.
+  It can cause an ESPHome slow-operation warning, but did not reboot the reader.
 
 ## Component provenance
 

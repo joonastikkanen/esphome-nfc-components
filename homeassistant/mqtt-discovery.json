@@ -1,0 +1,20 @@
+{
+  "name": "NFC Full Data",
+  "unique_id": "watermeter_nfc_full_data_e4b323c1fb7c",
+  "default_entity_id": "sensor.watermeter_nfc_reader_nfc_full_data",
+  "state_topic": "watermeter-nfc-reader/nfc/full",
+  "value_template": "{{ value_json.Time }}",
+  "json_attributes_topic": "watermeter-nfc-reader/nfc/full",
+  "icon": "mdi:water",
+  "expire_after": 120,
+  "qos": 1,
+  "device": {
+    "identifiers": ["watermeter-nfc-reader"],
+    "connections": [["mac", "e4:b3:23:c1:fb:7c"]],
+    "name": "Watermeter NFC Reader"
+  },
+  "origin": {
+    "name": "Watermeter NFC Reader",
+    "sw_version": "2026.10.2"
+  }
+}

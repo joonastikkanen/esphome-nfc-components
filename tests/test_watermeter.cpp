@@ -14,12 +14,16 @@ int main() {
   assert(reading.volume(volume) && std::abs(volume - 203.045f) < 0.001f);
   assert(reading.history.size() == 1);  // Last line has no trailing CRLF.
   assert(reading.get("Time") == "2026-11-04 13:11");
+  assert(reading.raw_text == meter);
+  assert(reading.json("uid", "type", true, false).find("\"RawText\"") == std::string::npos);
   assert(reading.json("04-01-02", "NFC Forum Type 2", false).size() <= 255);
   assert(reading.json("04-01-02", "NFC Forum Type 2").find("\"NFC_Id\":\"04-01-02\"") != std::string::npos);
   assert(watermeter::parse("\nVol:203,045 m3\n").volume(volume));
   for (const auto &bad : {"nan", "inf", "-1", "2 litres", "1.2.3", ""})
     assert(!watermeter::parse(std::string("Vol:") + bad).volume(volume));
   assert(watermeter::parse("Vol:1\rS/N:foo\rCRC:1234\rVol:2").get("Vol") == "1");
+  for (const auto &crc : {"CRC: 21284", "CRC=21284", "CRC 21284"})
+    assert(watermeter::parse(crc).get("CRC") == "21284");
   assert(watermeter::quote("a\"b\\c\n") == "\"a\\\"b\\\\c\\u000a\"");
 
   // Exercise the actual vendored NDEF implementation, including >255-byte records.

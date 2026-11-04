@@ -35,6 +35,7 @@ inline std::string quote(const std::string &value) {
 
 struct Reading {
   std::string name;
+  std::string raw_text;
   std::vector<std::pair<std::string, std::string>> fields;
   std::vector<std::pair<std::string, std::string>> history;
   std::string get(const std::string &key) const {
@@ -56,7 +57,8 @@ struct Reading {
     const std::string unit = trim(end);
     return unit.empty() || unit == "m³" || unit == "m3";
   }
-  std::string json(const std::string &uid, const std::string &type, bool full = true) const {
+  std::string json(const std::string &uid, const std::string &type, bool full = true,
+                   bool include_raw = true) const {
     std::string result = "{";
     auto add = [&result](const std::string &key, const std::string &value) {
       if (result.size() > 1)
@@ -80,6 +82,9 @@ struct Reading {
         result += "{\"date\":" + quote(history[i].first) + ",\"volume\":" + quote(history[i].second) + '}';
       }
       result += ']';
+      if (include_raw)
+        add("RawText", raw_text);
+      result += ",\"HistoryCount\":" + std::to_string(history.size());
     } else {
       add("Time", get("Time"));
       add("Vol", get("Vol"));
@@ -100,6 +105,7 @@ inline bool is_date(const std::string &key) {
 
 inline Reading parse(const std::string &input) {
   Reading reading;
+  reading.raw_text = input;
   size_t start = 0;
   while (start < input.size()) {
     const auto end = input.find_first_of("\r\n", start);
@@ -109,8 +115,10 @@ inline Reading parse(const std::string &input) {
       continue;
     const auto colon = line.find(':');
     const std::string key = trim(line.substr(0, colon));
-    if (key == "CRC" || line.compare(0, 4, "CRC=") == 0)
-      break;  // CRC is metadata; no claim is made to validate its algorithm.
+    if (key == "CRC" || line.compare(0, 4, "CRC=") == 0 || line.compare(0, 4, "CRC ") == 0) {
+      reading.fields.emplace_back("CRC", line.size() > 3 ? trim(line.substr(4)) : "");
+      break;  // Preserve the supplied CRC, but do not claim to validate it.
+    }
     if (colon == std::string::npos) {
       if (reading.name.empty())
         reading.name = line;

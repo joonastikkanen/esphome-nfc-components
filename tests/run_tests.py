@@ -5,6 +5,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+discovery = json.loads((ROOT / "homeassistant/mqtt-discovery.json").read_text())
+assert discovery["state_topic"] == discovery["json_attributes_topic"] == "watermeter-nfc-reader/nfc/full"
+assert discovery["unique_id"] == "watermeter_nfc_full_data_e4b323c1fb7c"
 with tempfile.TemporaryDirectory(prefix="watermeter-", dir="/tmp/opencode") as directory:
     build = Path(directory)
     core = build / "esphome/core"
@@ -35,4 +38,6 @@ with tempfile.TemporaryDirectory(prefix="watermeter-", dir="/tmp/opencode") as d
     document = json.loads(output.splitlines()[0])
     assert document["Name"] == "Ultrasonic Water Meter"
     assert len(document["history"]) == 1
+    assert document["HistoryCount"] == 1
+    assert document["RawText"].startswith("Ultrasonic Water Meter\r\n")
     print(output, end="")
