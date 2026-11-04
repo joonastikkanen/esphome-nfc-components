@@ -1,3 +1,4 @@
+// Modified for Watermeter NFC Reader: validate text encoding/language bounds.
 #include "ndef_record_text.h"
 #include "ndef_record.h"
 
@@ -13,6 +14,10 @@ NdefRecordText::NdefRecordText(const std::vector<uint8_t> &payload) {
   }
 
   uint8_t language_code_length = payload[0] & 0b00111111;  // Todo, make use of encoding bit?
+  if (payload.size() < 1U + language_code_length || (payload[0] & 0x80)) {
+    ESP_LOGE(TAG, "Invalid language length or unsupported UTF-16 text record");
+    return;
+  }
 
   this->language_code_ = std::string(payload.begin() + 1, payload.begin() + 1 + language_code_length);
 

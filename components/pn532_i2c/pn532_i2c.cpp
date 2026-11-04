@@ -1,3 +1,4 @@
+// Modified for Watermeter NFC Reader: propagate read errors and validate headers.
 #include "pn532_i2c.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
@@ -32,14 +33,13 @@ bool PN532I2C::read_data(std::vector<uint8_t> &data, uint8_t len) {
   }
 
   data.resize(len + 1);
-  this->read_bytes_raw(data.data(), len + 1);
-  return true;
+  return this->read_bytes_raw(data.data(), len + 1);
 }
 
 bool PN532I2C::read_response(uint8_t command, std::vector<uint8_t> &data) {
   ESP_LOGV(TAG, "Reading response");
   uint8_t len = this->read_response_length_();
-  if (len == 0) {
+  if (len == 0 || len > 247) {
     return false;
   }
 
@@ -49,7 +49,7 @@ bool PN532I2C::read_response(uint8_t command, std::vector<uint8_t> &data) {
     return false;
   }
 
-  if (data[1] != 0x00 && data[2] != 0x00 && data[3] != 0xFF) {
+  if (data[1] != 0x00 || data[2] != 0x00 || data[3] != 0xFF) {
     // invalid packet
     ESP_LOGV(TAG, "read data invalid preamble!");
     return false;
@@ -95,7 +95,7 @@ uint8_t PN532I2C::read_response_length_() {
     return 0;
   }
 
-  if (data[1] != 0x00 && data[2] != 0x00 && data[3] != 0xFF) {
+  if (data[1] != 0x00 || data[2] != 0x00 || data[3] != 0xFF) {
     // invalid packet
     ESP_LOGV(TAG, "read data invalid preamble!");
     return 0;

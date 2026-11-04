@@ -1,3 +1,4 @@
+# Modified for Watermeter NFC Reader: optional repeated reads of a stationary tag.
 from esphome import automation
 import esphome.codegen as cg
 from esphome.components import nfc
@@ -30,6 +31,7 @@ PN532IsWritingCondition = pn532_ns.class_(
 PN532_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(PN532),
+        cv.Optional("read_same_tag", default=False): cv.boolean,
         cv.Optional(CONF_ON_TAG): automation.validate_automation(
             {
                 cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
@@ -61,6 +63,7 @@ def CONFIG_SCHEMA(conf):
 
 async def setup_pn532(var, config):
     await cg.register_component(var, config)
+    cg.add(var.set_read_same_tag(config["read_same_tag"]))
 
     for conf in config.get(CONF_ON_TAG, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])

@@ -1,3 +1,4 @@
+// Modified for Watermeter NFC Reader: same-UID reads and response bounds checks.
 #include "pn532.h"
 
 #include <memory>
@@ -104,7 +105,7 @@ bool PN532::powerdown() {
 }
 
 void PN532::update() {
-  if (!updates_enabled_)
+  if (!updates_enabled_ || this->requested_read_)
     return;
 
   for (auto *obj : this->binary_sensors_)
@@ -154,6 +155,10 @@ void PN532::loop() {
     return;
   }
 
+  if (read.empty()) {
+    this->turn_off_rf_();
+    return;
+  }
   uint8_t num_targets = read[0];
   if (num_targets != 1) {
     // no tags found or too many
@@ -167,12 +172,17 @@ void PN532::loop() {
     return;
   }
 
-  uint8_t nfcid_length = read[5];
-  std::vector<uint8_t> nfcid(read.begin() + 6, read.begin() + 6 + nfcid_length);
-  if (read.size() < 6U + nfcid_length) {
-    // oops, pn532 returned invalid data
+  if (read.size() < 6U) {
+    this->turn_off_rf_();
     return;
   }
+  uint8_t nfcid_length = read[5];
+  if (nfcid_length == 0 || read.size() < 6U + nfcid_length) {
+    // oops, pn532 returned invalid data
+    this->turn_off_rf_();
+    return;
+  }
+  std::vector<uint8_t> nfcid(read.begin() + 6, read.begin() + 6 + nfcid_length);
 
   bool report = true;
   for (auto *bin_sens : this->binary_sensors_) {
@@ -185,8 +195,10 @@ void PN532::loop() {
     bool same_uid = true;
     for (size_t i = 0; i < nfcid.size(); i++)
       same_uid &= nfcid[i] == this->current_uid_[i];
-    if (same_uid)
+    if (same_uid && !this->read_same_tag_) {
+      this->turn_off_rf_();
       return;
+    }
   }
 
   this->current_uid_ = nfcid;

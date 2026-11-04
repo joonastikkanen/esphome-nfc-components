@@ -1,50 +1,49 @@
 esphome:
   name: watermeter-nfc-reader
   friendly_name: Watermeter NFC Reader
+  includes:
+    - watermeter_parser.h
 
+# One source only. Copy components/ alongside this YAML in ESPHome's config folder.
 external_components:
   - source:
-      type: git
-      url: https://github.com/joonastikkanen/esphome-nfc-components.git
-      ref: main
+      type: local
       path: components
-    components: [ nfc, pn532_i2c, pn532 ]
-    refresh: 0s
+    components: [nfc, pn532_i2c, pn532]
 
 esp32:
   board: esp32-c3-devkitm-1
   framework:
     type: arduino
 
+api:
+  encryption:
+    key: !secret watermeter_api_key
+
+ota:
+  - platform: esphome
+    password: !secret watermeter_ota_password
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-
-  # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
-    ssid: "Watermeter-Nfc-Reader"
+    ssid: Watermeter-Nfc-Reader
     password: !secret watermeter_ap_password
 
 captive_portal:
-
 web_server:
+  include_internal: true
 
-# Enable logging
 logger:
   level: DEBUG
-  logs:
-    lambda: DEBUG  
-    custom: DEBUG  
-    nfc: DEBUG
-    pn532_i2c: DEBUG
-    pn532: DEBUG
-    i2c: DEBUG
+  tx_buffer_size: 2048
 
 i2c:
-  - id: bus_a
-    sda: GPIO6
-    scl: GPIO7
-    scan: True
+  id: bus_a
+  sda: GPIO6
+  scl: GPIO7
+  scan: true
 
 time:
   - platform: sntp
@@ -52,7 +51,7 @@ time:
     servers:
       - 0.fi.pool.ntp.org
       - 1.fi.pool.ntp.org
-      - 2-fi.pool.ntp.org
+      - 2.fi.pool.ntp.org
 
 debug:
   update_interval: 30s
@@ -60,148 +59,97 @@ debug:
 button:
   - platform: restart
     name: Restart
+  - platform: template
+    name: Read Water Meter NFC
+    icon: mdi:nfc-search-variant
+    on_press:
+      - component.update: i_pn532
 
 sensor:
   - platform: uptime
     name: Uptime
-  - platform: wifi_signal # Reports the WiFi signal strength/RSSI in dB
-    name: "Device WiFi Signal dB"
+  - platform: wifi_signal
+    name: Device WiFi Signal dB
     id: wifi_signal_db
     update_interval: 60s
-    entity_category: "diagnostic"
-
-  - platform: copy # Reports the WiFi signal strength in %
+    entity_category: diagnostic
+  - platform: copy
     source_id: wifi_signal_db
-    name: "Device WiFi Signal Percent"
+    name: Device WiFi Signal Percent
     filters:
-      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
-    unit_of_measurement: "Signal %"
-    entity_category: "diagnostic"
+      - lambda: return min(max(2 * (x + 100.0f), 0.0f), 100.0f);
+    unit_of_measurement: Signal %
+    entity_category: diagnostic
     device_class: ""
-
   - platform: template
-    name: "Water Volume"
+    name: Water Volume
     id: water_volume
-    unit_of_measurement: "m³"
-    device_class: "water"
-    state_class: "total_increasing"
+    unit_of_measurement: m³
+    device_class: water
+    state_class: total_increasing
     accuracy_decimals: 3
     icon: mdi:water
+    update_interval: never
 
 text_sensor:
   - platform: debug
     reset_reason:
       name: Reset Reason
+  # HA entity states are limited to 255 characters. Keep this a compact summary.
   - platform: template
-    name: "Water Meter NFC Data"
+    name: Water Meter NFC Data
     id: water_meter_json
     icon: mdi:water
+    update_interval: never
+  # Full data remains on the device/web server, not in an oversized HA state.
+  - platform: template
+    name: Water Meter NFC Full JSON
+    id: water_meter_full_json
+    internal: true
+    update_interval: never
+  - platform: template
+    name: Water Meter NFC Raw Text
+    id: water_meter_raw
+    internal: true
+    update_interval: never
 
 pn532_i2c:
   id: i_pn532
+  i2c_id: bus_a
   update_interval: 30s
+  read_same_tag: true
   on_tag:
     then:
       - lambda: |-
-          std::string payload1 = "";
-          auto nfckey = tag.get_tag_type();
-          if (!tag.has_ndef_message()) return;
-
-          auto message = tag.get_ndef_message();
-          auto records = message->get_records();
-          std::string input = records[0]->get_payload();
-
-          if (input != "") {
-            std::string gjson = "";
-            std::string ajson = "";
-            std::string hjson = "\"history\": [";
-            std::string iname = "";
-            std::string isn = "";
-            std::string vol_value = "";
-            std::string line = "";
-            size_t delimiter = 0;
-
-            size_t crc_pos = input.find("CRC");
-            if (crc_pos != std::string::npos) input = input.substr(0, crc_pos);
-
-            size_t pos = 0;
-            bool is_first_line = true;
-            while ((pos = input.find("\r\n")) != std::string::npos) {
-              line = input.substr(0, pos);
-              input.erase(0, pos + 2);
-
-              if (is_first_line) {
-                is_first_line = false;
-                gjson += std::string("\"") + "Name" + "\": \"" + line + "\",";
-                continue;
-              }
-
-              delimiter = line.find(':');
-              if (delimiter != std::string::npos) {
-                std::string key = line.substr(0, delimiter);
-                std::string value = line.substr(delimiter + 1);
-
-                key.erase(0, key.find_first_not_of(" \t"));
-                key.erase(key.find_last_not_of(" \t") + 1);
-                value.erase(0, value.find_first_not_of(" \t"));
-                value.erase(value.find_last_not_of(" \t") + 1);
-
-                if (key.length() == 10 && key[4] == '-' && key[7] == '-') {
-                  hjson += "{\"date\": \"" + key + "\", \"volume\": \"" + value + "\"},";
-                } else if (key == "Vol" || key == "Temp" || key == "FVol" || key == "RVol" || key == "KVol" || key == "KDate" || key == "Time") {
-                  ajson += "\"" + key + "\": \"" + value + "\",";
-                  if (key == "Vol") {
-                    vol_value = value;
-                  }
-                } else if (key == "S/N") {
-                  gjson += "\"SN\": \"" + value + "\",";
-                  gjson += "\"NFC_Id\": \"" + value + "\",";
-                  gjson += "\"NFC_Typ\": \"" + nfckey + "\",";
-                  isn = value;
-                } else if (key == "Battery") {
-                  gjson += "\"Battery\": \"" + value + "\",";
-                }
-              }
-            }
-
-            if (hjson.back() == ',') hjson.pop_back();
-            gjson = "{" + gjson + ajson + hjson + "]}";
-
-            std::string iconv = isn;
-            isn = "";
-            for (char c : iconv) {
-              if (c >= 'A' && c <= 'Z') {
-                isn += c + ('a' - 'A');
-              } else {
-                isn += c;
-              }
-            }
-
-            ESP_LOGD("lambda", "S/N (klein): %s", isn.c_str());
-            ESP_LOGD("lambda", "JSON-String: %s", gjson.c_str());
-
-            id(water_meter_json).publish_state(gjson);
-            
-            // Extract and publish volume value
-            if (!vol_value.empty()) {
-              // Remove unit (m³) if present and convert to float
-              std::string vol_numeric = vol_value;
-              size_t unit_pos = vol_numeric.find(" m³");
-              if (unit_pos != std::string::npos) {
-                vol_numeric = vol_numeric.substr(0, unit_pos);
-              }
-              
-              // Simple string to float conversion without exceptions
-              char* endptr;
-              float volume_float = strtof(vol_numeric.c_str(), &endptr);
-              
-              // Check if conversion was successful
-              if (endptr != vol_numeric.c_str() && *endptr == '\0') {
-                id(water_volume).publish_state(volume_float);
-                ESP_LOGD("lambda", "Volume: %.3f m³", volume_float);
-              } else {
-                ESP_LOGW("lambda", "Failed to parse volume: %s", vol_value.c_str());
-              }
-            }
+          if (!tag.has_ndef_message()) {
+            ESP_LOGW("watermeter", "Tag %s has no complete NDEF message", x.c_str());
+            return;
           }
-          delay(500);
+          std::string input;
+          for (const auto &record : tag.get_ndef_message()->get_records()) {
+            if (record->get_type() != "T")
+              continue;
+            if (!input.empty()) input += '\n';
+            input += record->get_payload();
+          }
+          if (input.empty()) {
+            ESP_LOGW("watermeter", "No supported text records");
+            return;
+          }
+          id(water_meter_raw).publish_state(input);
+          ESP_LOGD("watermeter", "Decoded NFC text (%u bytes): %s", unsigned(input.size()), input.c_str());
+          auto reading = watermeter::parse(input);
+          float volume;
+          if (reading.get("S/N").empty() || !reading.volume(volume)) {
+            ESP_LOGW("watermeter", "Missing serial or invalid volume; retaining last good reading");
+            return;
+          }
+          const auto full = reading.json(x, tag.get_tag_type());
+          const auto summary = reading.json(x, tag.get_tag_type(), false);
+          id(water_meter_full_json).publish_state(full);
+          if (summary.size() <= 255)
+            id(water_meter_json).publish_state(summary);
+          else
+            ESP_LOGW("watermeter", "Summary exceeds HA state limit; see full JSON on device");
+          id(water_volume).publish_state(volume);
+          ESP_LOGI("watermeter", "Read %.3f m³, %u history entries", volume, unsigned(reading.history.size()));

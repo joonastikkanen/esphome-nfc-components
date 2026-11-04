@@ -1,4 +1,5 @@
 #pragma once
+// Modified for Watermeter NFC Reader: configurable same-UID rereads.
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
@@ -51,6 +52,7 @@ class PN532 : public PollingComponent {
   bool is_writing() { return this->next_task_ != READ; };
 
   void read_mode();
+  void set_read_same_tag(bool value) { this->read_same_tag_ = value; }
   void clean_mode();
   void format_mode();
   void write_mode(nfc::NdefMessage *message);
@@ -94,6 +96,7 @@ class PN532 : public PollingComponent {
   bool clean_mifare_ultralight_();
 
   bool updates_enabled_{true};
+  bool read_same_tag_{false};
   bool requested_read_{false};
   std::vector<PN532BinarySensor *> binary_sensors_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;

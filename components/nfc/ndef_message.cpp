@@ -1,3 +1,4 @@
+// Modified for Watermeter NFC Reader: wide indices and strict bounds validation.
 #include "ndef_message.h"
 #include <cinttypes>
 
@@ -8,13 +9,23 @@ static const char *const TAG = "nfc.ndef_message";
 
 NdefMessage::NdefMessage(std::vector<uint8_t> &data) {
   ESP_LOGV(TAG, "Building NdefMessage with %zu bytes", data.size());
-  uint8_t index = 0;
-  while (index <= data.size()) {
+  size_t index = 0;
+  while (index < data.size()) {
+    if (data.size() - index < 3) {
+      ESP_LOGE(TAG, "Truncated NDEF header");
+      this->records_.clear();
+      return;
+    }
     uint8_t tnf_byte = data[index++];
     bool me = tnf_byte & 0x40;      // Message End bit (is set if this is the last record of the message)
     bool sr = tnf_byte & 0x10;      // Short record bit (is set if payload size is less or equal to 255 bytes)
     bool il = tnf_byte & 0x08;      // ID length bit (is set if ID Length field exists)
     uint8_t tnf = tnf_byte & 0x07;  // Type Name Format
+    if (tnf_byte & 0x20) {
+      ESP_LOGE(TAG, "Chunked NDEF records are unsupported");
+      this->records_.clear();
+      return;
+    }
 
     ESP_LOGVV(TAG, "me=%s, sr=%s, il=%s, tnf=%d", YESNO(me), YESNO(sr), YESNO(il), tnf);
 
@@ -23,6 +34,10 @@ NdefMessage::NdefMessage(std::vector<uint8_t> &data) {
     if (sr) {
       payload_length = data[index++];
     } else {
+      if (data.size() - index < 4) {
+        this->records_.clear();
+        return;
+      }
       payload_length = (static_cast<uint32_t>(data[index]) << 24) | (static_cast<uint32_t>(data[index + 1]) << 16) |
                        (static_cast<uint32_t>(data[index + 2]) << 8) | static_cast<uint32_t>(data[index + 3]);
       index += 4;
@@ -30,7 +45,19 @@ NdefMessage::NdefMessage(std::vector<uint8_t> &data) {
 
     uint8_t id_length = 0;
     if (il) {
+      if (index >= data.size()) {
+        this->records_.clear();
+        return;
+      }
       id_length = data[index++];
+    }
+
+    if (type_length > data.size() - index ||
+        id_length > data.size() - index - type_length ||
+        payload_length > data.size() - index - type_length - id_length) {
+      ESP_LOGE(TAG, "Truncated NDEF record");
+      this->records_.clear();
+      return;
     }
 
     ESP_LOGVV(TAG, "Lengths: type=%d, payload=%" PRIu32 ", id=%d", type_length, payload_length, id_length);
@@ -72,11 +99,16 @@ NdefMessage::NdefMessage(std::vector<uint8_t> &data) {
     index += payload_length;
 
     ESP_LOGV(TAG, "Adding record type %s = %s", record->get_type().c_str(), record->get_payload().c_str());
-    this->add_record(std::move(record));
+    if (!this->add_record(std::move(record))) {
+      this->records_.clear();
+      return;
+    }
 
     if (me)
-      break;
+      return;
   }
+  ESP_LOGE(TAG, "NDEF message has no end record");
+  this->records_.clear();
 }
 
 bool NdefMessage::add_record(std::unique_ptr<NdefRecord> record) {

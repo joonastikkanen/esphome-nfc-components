@@ -1,0 +1,11 @@
+# Generated ESPHome and Python files
+.esphome/
+.pio/
+.pioenvs/
+.piolibdeps/
+__pycache__/
+.venv/
+
+# Local device credentials
+secrets.yaml
+secrets.yml
