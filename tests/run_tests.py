@@ -5,9 +5,13 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-discovery = json.loads((ROOT / "homeassistant/mqtt-discovery.json").read_text())
-assert discovery["state_topic"] == discovery["json_attributes_topic"] == "watermeter-nfc-reader/nfc/full"
-assert discovery["unique_id"] == "watermeter_nfc_full_data_e4b323c1fb7c"
+config = (ROOT / "watermeter-nfc-reader.yaml").read_text()
+assert "mqtt.publish" not in config and "homeassistant.action" not in config
+assert "name: NFC Read Interval" in config and "restore_value: true" in config
+entities = (ROOT / "watermeter_entities.yaml").read_text()
+for index in range(1, 29):
+    assert f"id: history_volume_{index:02}" in entities
+    assert f"id: history_date_{index:02}" in entities
 with tempfile.TemporaryDirectory(prefix="watermeter-", dir="/tmp/opencode") as directory:
     build = Path(directory)
     core = build / "esphome/core"

@@ -1,0 +1,244 @@
+# Native ESPHome entities only: no MQTT or Home Assistant action calls.
+sensor:
+  - platform: template
+    name: Water Temperature
+    id: meter_temperature
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+  - <<: &volume_sensor
+      platform: template
+      unit_of_measurement: m³
+      device_class: water
+      accuracy_decimals: 3
+      update_interval: never
+    name: Forward Water Volume
+    id: meter_forward_volume
+    state_class: total_increasing
+  - <<: *volume_sensor
+    name: Reverse Water Volume
+    id: meter_reverse_volume
+    # The meter reports a signed negative cumulative reverse volume.
+    state_class: total
+  - <<: *volume_sensor
+    name: Key Date Water Volume
+    id: meter_key_volume
+    state_class: measurement
+  - platform: template
+    name: History Count
+    id: meter_history_count
+    accuracy_decimals: 0
+    update_interval: never
+
+  # Slots follow the meter's newest-to-oldest order. Each has a date entity.
+  # Use Water Volume, not these rolling snapshots, for Energy consumption.
+  - <<: &history_volume_sensor
+      <<: *volume_sensor
+      state_class: measurement
+    name: History 01 Volume
+    id: history_volume_01
+  - <<: *history_volume_sensor
+    name: History 02 Volume
+    id: history_volume_02
+  - <<: *history_volume_sensor
+    name: History 03 Volume
+    id: history_volume_03
+  - <<: *history_volume_sensor
+    name: History 04 Volume
+    id: history_volume_04
+  - <<: *history_volume_sensor
+    name: History 05 Volume
+    id: history_volume_05
+  - <<: *history_volume_sensor
+    name: History 06 Volume
+    id: history_volume_06
+  - <<: *history_volume_sensor
+    name: History 07 Volume
+    id: history_volume_07
+  - <<: *history_volume_sensor
+    name: History 08 Volume
+    id: history_volume_08
+  - <<: *history_volume_sensor
+    name: History 09 Volume
+    id: history_volume_09
+  - <<: *history_volume_sensor
+    name: History 10 Volume
+    id: history_volume_10
+  - <<: *history_volume_sensor
+    name: History 11 Volume
+    id: history_volume_11
+  - <<: *history_volume_sensor
+    name: History 12 Volume
+    id: history_volume_12
+  - <<: *history_volume_sensor
+    name: History 13 Volume
+    id: history_volume_13
+  - <<: *history_volume_sensor
+    name: History 14 Volume
+    id: history_volume_14
+  - <<: *history_volume_sensor
+    name: History 15 Volume
+    id: history_volume_15
+  - <<: *history_volume_sensor
+    name: History 16 Volume
+    id: history_volume_16
+  - <<: *history_volume_sensor
+    name: History 17 Volume
+    id: history_volume_17
+  - <<: *history_volume_sensor
+    name: History 18 Volume
+    id: history_volume_18
+  - <<: *history_volume_sensor
+    name: History 19 Volume
+    id: history_volume_19
+  - <<: *history_volume_sensor
+    name: History 20 Volume
+    id: history_volume_20
+  - <<: *history_volume_sensor
+    name: History 21 Volume
+    id: history_volume_21
+  - <<: *history_volume_sensor
+    name: History 22 Volume
+    id: history_volume_22
+  - <<: *history_volume_sensor
+    name: History 23 Volume
+    id: history_volume_23
+  - <<: *history_volume_sensor
+    name: History 24 Volume
+    id: history_volume_24
+  - <<: *history_volume_sensor
+    name: History 25 Volume
+    id: history_volume_25
+  - <<: *history_volume_sensor
+    name: History 26 Volume
+    id: history_volume_26
+  - <<: *history_volume_sensor
+    name: History 27 Volume
+    id: history_volume_27
+  - <<: *history_volume_sensor
+    name: History 28 Volume
+    id: history_volume_28
+
+text_sensor:
+  - <<: &meter_text_sensor
+      platform: template
+      update_interval: never
+    name: Meter Name
+    id: meter_name
+  - <<: *meter_text_sensor
+    name: Meter Serial Number
+    id: meter_serial
+    entity_category: diagnostic
+  - <<: *meter_text_sensor
+    name: NFC Tag UID
+    id: meter_nfc_uid
+    entity_category: diagnostic
+  - <<: *meter_text_sensor
+    name: NFC Tag Type
+    id: meter_nfc_type
+    entity_category: diagnostic
+  - <<: *meter_text_sensor
+    name: Meter Time
+    id: meter_time
+  - <<: *meter_text_sensor
+    name: Key Date
+    id: meter_key_date
+  - <<: *meter_text_sensor
+    name: Meter Battery
+    id: meter_battery
+    icon: mdi:battery-clock
+    # Preserve the reported value (e.g. 2040); it is NOT a percentage.
+  - <<: *meter_text_sensor
+    name: Meter Firmware
+    id: meter_firmware
+    entity_category: diagnostic
+  - <<: *meter_text_sensor
+    name: Meter CRC
+    id: meter_crc
+    entity_category: diagnostic
+  - <<: *meter_text_sensor
+    name: History 01 Date
+    id: history_date_01
+  - <<: *meter_text_sensor
+    name: History 02 Date
+    id: history_date_02
+  - <<: *meter_text_sensor
+    name: History 03 Date
+    id: history_date_03
+  - <<: *meter_text_sensor
+    name: History 04 Date
+    id: history_date_04
+  - <<: *meter_text_sensor
+    name: History 05 Date
+    id: history_date_05
+  - <<: *meter_text_sensor
+    name: History 06 Date
+    id: history_date_06
+  - <<: *meter_text_sensor
+    name: History 07 Date
+    id: history_date_07
+  - <<: *meter_text_sensor
+    name: History 08 Date
+    id: history_date_08
+  - <<: *meter_text_sensor
+    name: History 09 Date
+    id: history_date_09
+  - <<: *meter_text_sensor
+    name: History 10 Date
+    id: history_date_10
+  - <<: *meter_text_sensor
+    name: History 11 Date
+    id: history_date_11
+  - <<: *meter_text_sensor
+    name: History 12 Date
+    id: history_date_12
+  - <<: *meter_text_sensor
+    name: History 13 Date
+    id: history_date_13
+  - <<: *meter_text_sensor
+    name: History 14 Date
+    id: history_date_14
+  - <<: *meter_text_sensor
+    name: History 15 Date
+    id: history_date_15
+  - <<: *meter_text_sensor
+    name: History 16 Date
+    id: history_date_16
+  - <<: *meter_text_sensor
+    name: History 17 Date
+    id: history_date_17
+  - <<: *meter_text_sensor
+    name: History 18 Date
+    id: history_date_18
+  - <<: *meter_text_sensor
+    name: History 19 Date
+    id: history_date_19
+  - <<: *meter_text_sensor
+    name: History 20 Date
+    id: history_date_20
+  - <<: *meter_text_sensor
+    name: History 21 Date
+    id: history_date_21
+  - <<: *meter_text_sensor
+    name: History 22 Date
+    id: history_date_22
+  - <<: *meter_text_sensor
+    name: History 23 Date
+    id: history_date_23
+  - <<: *meter_text_sensor
+    name: History 24 Date
+    id: history_date_24
+  - <<: *meter_text_sensor
+    name: History 25 Date
+    id: history_date_25
+  - <<: *meter_text_sensor
+    name: History 26 Date
+    id: history_date_26
+  - <<: *meter_text_sensor
+    name: History 27 Date
+    id: history_date_27
+  - <<: *meter_text_sensor
+    name: History 28 Date
+    id: history_date_28

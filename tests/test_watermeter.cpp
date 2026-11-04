@@ -21,6 +21,11 @@ int main() {
   assert(watermeter::parse("\nVol:203,045 m3\n").volume(volume));
   for (const auto &bad : {"nan", "inf", "-1", "2 litres", "1.2.3", ""})
     assert(!watermeter::parse(std::string("Vol:") + bad).volume(volume));
+  assert(watermeter::parse_quantity("119.232  m³", "m³", volume) && std::abs(volume - 119.232f) < .001f);
+  assert(watermeter::parse_quantity("-4.770 m³", "m³", volume, true) && std::abs(volume + 4.770f) < .001f);
+  assert(!watermeter::parse_quantity("-4.770 m³", "m³", volume));
+  assert(watermeter::parse_quantity("12,6 °C", "°C", volume, true) && std::abs(volume - 12.6f) < .001f);
+  assert(!watermeter::parse_quantity("12.6 °F", "°C", volume, true));
   assert(watermeter::parse("Vol:1\rS/N:foo\rCRC:1234\rVol:2").get("Vol") == "1");
   for (const auto &crc : {"CRC: 21284", "CRC=21284", "CRC 21284"})
     assert(watermeter::parse(crc).get("CRC") == "21284");

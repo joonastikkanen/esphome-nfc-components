@@ -1,6 +1,7 @@
 """Read-only NFC acceptance test (presses the reader's scan button, not Restart)."""
 import argparse
 import json
+import math
 import threading
 import time
 import urllib.parse
@@ -19,6 +20,17 @@ def main():
     uptimes = []
     errors = []
     ready = threading.Event()
+
+    def get_value(domain, name):
+        path = "/" + domain + "/" + urllib.parse.quote(name, safe="")
+        with urllib.request.urlopen(base + path, timeout=15) as response:
+            return json.load(response)["value"]
+
+    def set_interval(value):
+        path = "/number/" + urllib.parse.quote("NFC Read Interval", safe="")
+        request = urllib.request.Request(base + path + f"/set?value={value:g}", method="POST")
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == 200
 
     def collect():
         try:
@@ -58,7 +70,12 @@ def main():
     threading.Thread(target=collect, daemon=True).start()
     assert ready.wait(15), "Device event stream unavailable"
     passed = False
+    original_interval = None
     try:
+        original_interval = float(get_value("number", "NFC Read Interval"))
+        set_interval(10)
+        assert float(get_value("number", "NFC Read Interval")) == 10
+        print(f"Read interval changed {original_interval:g} → 10 seconds without restart", flush=True)
         with condition:
             assert condition.wait_for(
                 lambda: "button/Read Water Meter NFC" in states or errors, timeout=15
@@ -86,13 +103,11 @@ def main():
                 "No successful automatic refresh within two polling intervals"
             )
             assert not errors, errors
-            assert len(uptimes) >= 2, "Insufficient uptime samples"
+            assert condition.wait_for(lambda: len(uptimes) >= 2 or errors, timeout=15), "Insufficient uptime samples"
             assert all(b >= a for a, b in zip(uptimes, uptimes[1:])), "Device rebooted during scans"
             # Full JSON can exceed the web server's SSE event-size budget once
             # RawText is included. Fetch it with the normal entity REST endpoint.
-            full_path = "/text_sensor/" + urllib.parse.quote("Water Meter NFC Full JSON", safe="")
-            with urllib.request.urlopen(base + full_path, timeout=15) as response:
-                full = json.loads(json.load(response)["value"])
+            full = json.loads(get_value("text_sensor", "Water Meter NFC Full JSON"))
             summary = states["text_sensor/Water Meter NFC Data"]["value"]
             assert len(summary) <= 255
             json.loads(summary)
@@ -102,10 +117,34 @@ def main():
             assert full["HistoryCount"] == len(full["history"])
             assert full["CRC"], "Meter CRC was not preserved"
             assert states["text_sensor/Water Meter NFC Raw Text"]["value"].startswith(full["Name"])
+            numeric_fields = {
+                "Water Volume": "Vol", "Water Temperature": "Temp",
+                "Forward Water Volume": "FVol", "Reverse Water Volume": "RVol",
+                "Key Date Water Volume": "KVol",
+            }
+            for name, key in numeric_fields.items():
+                expected = float(full[key].split()[0].replace(",", "."))
+                assert math.isclose(float(get_value("sensor", name)), expected, abs_tol=.001), name
+            text_fields = {
+                "Meter Name": "Name", "Meter Serial Number": "SN", "NFC Tag UID": "NFC_Id",
+                "NFC Tag Type": "NFC_Typ", "Meter Time": "Time", "Key Date": "KDate",
+                "Meter Battery": "Battery", "Meter Firmware": "FW", "Meter CRC": "CRC",
+            }
+            for name, key in text_fields.items():
+                assert get_value("text_sensor", name) == full[key], name
+            assert int(get_value("sensor", "History Count")) == len(full["history"])
+            for index, record in enumerate(full["history"], start=1):
+                expected = float(record["volume"].split()[0].replace(",", "."))
+                assert math.isclose(float(get_value("sensor", f"History {index:02} Volume")), expected, abs_tol=.001)
+                assert get_value("text_sensor", f"History {index:02} Date") == record["date"]
+            print("All native field sensors and 28 history date/volume pairs verified")
             print(f"{full['Name']}: {full['Vol']}, {len(full['history'])} history entries")
             print(f"Automatic refresh passed; uptime {uptimes[0]} → {uptimes[-1]} seconds")
             passed = True
     finally:
+        if original_interval is not None:
+            set_interval(original_interval)
+            print(f"Read interval restored to {original_interval:g} seconds", flush=True)
         if not passed:
             for key, value in states.items():
                 if "NFC Raw" in key:

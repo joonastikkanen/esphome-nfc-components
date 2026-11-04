@@ -33,6 +33,19 @@ inline std::string quote(const std::string &value) {
   return result + '"';
 }
 
+inline bool parse_quantity(std::string text, const std::string &expected_unit, float &value,
+                           bool allow_negative = false) {
+  for (auto &c : text)
+    if (c == ',')
+      c = '.';
+  char *end = nullptr;
+  value = std::strtof(text.c_str(), &end);
+  if (end == text.c_str() || !std::isfinite(value) || (!allow_negative && value < 0))
+    return false;
+  const auto unit = trim(end);
+  return unit.empty() || unit == expected_unit || (expected_unit == "m³" && unit == "m3");
+}
+
 struct Reading {
   std::string name;
   std::string raw_text;
@@ -45,17 +58,7 @@ struct Reading {
     return {};
   }
   bool volume(float &value) const {
-    std::string text = get("Vol");
-    // Accept decimal comma, but not thousands separators or unknown units.
-    for (auto &c : text)
-      if (c == ',')
-        c = '.';
-    char *end = nullptr;
-    value = std::strtof(text.c_str(), &end);
-    if (end == text.c_str() || !std::isfinite(value) || value < 0)
-      return false;
-    const std::string unit = trim(end);
-    return unit.empty() || unit == "m³" || unit == "m3";
+    return parse_quantity(get("Vol"), "m³", value);
   }
   std::string json(const std::string &uid, const std::string &type, bool full = true,
                    bool include_raw = true) const {

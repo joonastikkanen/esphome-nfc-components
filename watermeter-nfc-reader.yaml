@@ -3,6 +3,17 @@ esphome:
   friendly_name: Watermeter NFC Reader
   includes:
     - watermeter_parser.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          // Template numbers restore their state during setup, before this runs.
+          id(i_pn532).set_update_interval(static_cast<uint32_t>(id(nfc_read_interval).state * 1000.0f));
+          id(i_pn532).stop_poller();
+          id(i_pn532).start_poller();
+
+packages:
+  native_meter_entities: !include watermeter_entities.yaml
 
 # One source only. Copy components/ alongside this YAML in ESPHome's config folder.
 external_components:
@@ -17,9 +28,6 @@ esp32:
     type: arduino
 
 api:
-  # The reader publishes full JSON via HA's mqtt.publish action; no broker
-  # credentials are stored on the ESP32. Enable HA's allow_service_calls option.
-  homeassistant_services: true
   encryption:
     key: !secret watermeter_api_key
 
@@ -68,6 +76,26 @@ button:
     on_press:
       - component.update: i_pn532
 
+number:
+  - platform: template
+    name: NFC Read Interval
+    id: nfc_read_interval
+    icon: mdi:timer-cog-outline
+    entity_category: config
+    unit_of_measurement: s
+    min_value: 10
+    max_value: 3600
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    mode: box
+    set_action:
+      - lambda: |-
+          id(i_pn532).set_update_interval(static_cast<uint32_t>(x * 1000.0f));
+          id(i_pn532).stop_poller();
+          id(i_pn532).start_poller();
+
 sensor:
   - platform: uptime
     name: Uptime
@@ -110,20 +138,6 @@ text_sensor:
     id: water_meter_full_json
     internal: true
     update_interval: never
-    on_value:
-      - homeassistant.action:
-          action: mqtt.publish
-          data:
-            topic: watermeter-nfc-reader/nfc/full
-            # The web entity keeps raw text separate to stay below ESPHome's
-            # 5120-byte serialized HTTP response cap (state/value duplicate it).
-            # MQTT attributes still receive the complete raw text as well.
-            payload: !lambda |-
-              if (x.empty() || x.back() != '}') return std::string();
-              return x.substr(0, x.size() - 1) + ",\"RawText\":" +
-                     watermeter::quote(id(water_meter_raw).state) + "}";
-            retain: "true"
-            qos: "1"
   - platform: template
     name: Water Meter NFC Raw Text
     id: water_meter_raw
@@ -169,4 +183,50 @@ pn532_i2c:
           else
             ESP_LOGW("watermeter", "Summary exceeds HA state limit; see full JSON on device");
           id(water_volume).publish_state(volume);
+          auto publish_number = [](sensor::Sensor *entity, const std::string &text,
+                                   const std::string &unit, bool allow_negative = false) {
+            float value;
+            entity->publish_state(watermeter::parse_quantity(text, unit, value, allow_negative) ? value : NAN);
+          };
+          publish_number(id(meter_temperature), reading.get("Temp"), "°C", true);
+          publish_number(id(meter_forward_volume), reading.get("FVol"), "m³");
+          publish_number(id(meter_reverse_volume), reading.get("RVol"), "m³", true);
+          publish_number(id(meter_key_volume), reading.get("KVol"), "m³");
+          id(meter_history_count).publish_state(reading.history.size());
+          id(meter_name).publish_state(reading.name);
+          id(meter_serial).publish_state(reading.get("S/N"));
+          id(meter_nfc_uid).publish_state(x);
+          id(meter_nfc_type).publish_state(tag.get_tag_type());
+          id(meter_time).publish_state(reading.get("Time"));
+          id(meter_key_date).publish_state(reading.get("KDate"));
+          id(meter_battery).publish_state(reading.get("Battery"));
+          id(meter_firmware).publish_state(reading.get("FW"));
+          id(meter_crc).publish_state(reading.get("CRC"));
+          sensor::Sensor *history_volumes[] = {
+            id(history_volume_01), id(history_volume_02), id(history_volume_03), id(history_volume_04),
+            id(history_volume_05), id(history_volume_06), id(history_volume_07), id(history_volume_08),
+            id(history_volume_09), id(history_volume_10), id(history_volume_11), id(history_volume_12),
+            id(history_volume_13), id(history_volume_14), id(history_volume_15), id(history_volume_16),
+            id(history_volume_17), id(history_volume_18), id(history_volume_19), id(history_volume_20),
+            id(history_volume_21), id(history_volume_22), id(history_volume_23), id(history_volume_24),
+            id(history_volume_25), id(history_volume_26), id(history_volume_27), id(history_volume_28)
+          };
+          text_sensor::TextSensor *history_dates[] = {
+            id(history_date_01), id(history_date_02), id(history_date_03), id(history_date_04),
+            id(history_date_05), id(history_date_06), id(history_date_07), id(history_date_08),
+            id(history_date_09), id(history_date_10), id(history_date_11), id(history_date_12),
+            id(history_date_13), id(history_date_14), id(history_date_15), id(history_date_16),
+            id(history_date_17), id(history_date_18), id(history_date_19), id(history_date_20),
+            id(history_date_21), id(history_date_22), id(history_date_23), id(history_date_24),
+            id(history_date_25), id(history_date_26), id(history_date_27), id(history_date_28)
+          };
+          for (size_t i = 0; i < 28; ++i) {
+            if (i < reading.history.size()) {
+              history_dates[i]->publish_state(reading.history[i].first);
+              publish_number(history_volumes[i], reading.history[i].second, "m³");
+            } else {
+              history_dates[i]->publish_state("");
+              history_volumes[i]->publish_state(NAN);
+            }
+          }
           ESP_LOGI("watermeter", "Read %.3f m³, %u history entries", volume, unsigned(reading.history.size()));
