@@ -99,6 +99,8 @@ UTF-16 text, and chunked NDEF records are explicitly unsupported.
 python tests/run_tests.py
 esphome config watermeter-nfc-reader.yaml
 esphome compile watermeter-nfc-reader.yaml
+# After installing the firmware (presses Scan twice and checks automatic refresh):
+python tests/test_device.py 10.20.30.23
 ```
 
 On this machine the host tests were run with `env -u LD_LIBRARY_PATH python
