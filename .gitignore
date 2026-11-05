@@ -9,3 +9,8 @@ __pycache__/
 # Local device credentials
 secrets.yaml
 secrets.yml
+
+# FreeCAD automatic backups and regenerated exports
+*.FCBak
+*.FCStd1
+hardware/generated/

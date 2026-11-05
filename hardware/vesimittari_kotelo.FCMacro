@@ -1,0 +1,558 @@
+# -*- coding: utf-8 -*-
+"""Water meter NFC enclosure v1.3: snap-on cover and ESP32 retention. Units: mm.
+Edit the P dictionary and run in the FreeCAD GUI. Each run creates new documents.
+STLs use print orientation; assembly FCStd and STEP use assembly orientation.
+Regenerated output goes to generated/ beside this macro, not the supplied assets.
+"""
+import FreeCAD as App
+import FreeCADGui as Gui
+import Part
+import MeshPart
+import math
+import os
+import json
+
+# Do not overwrite the supplied, versioned CAD and STL exports when regenerating.
+_macro_file = globals().get('__file__')
+_macro_dir = os.path.dirname(os.path.abspath(_macro_file)) if _macro_file else App.getUserMacroDir()
+OUT = os.path.join(_macro_dir, 'generated', 'vesimittari_v1_3')
+P = dict(meter_x=98.0, meter_y=96.0, meter_height_above_cabinet=35.0,
+         fit_clearance=0.6, skirt_height=8.0, skirt_wall=3.0,
+         deck=1.6, bridge_floor=0.8, tray_floor=0.8,
+         nfc_x=42.6, nfc_y=40.5, pcb_clearance=0.6, nfc_wall=1.6,
+         nfc_cover_thickness=1.2, nfc_wall_height=7.2,
+         esp_x=17.8, esp_y=21.0, esp_thickness=3.5,
+         antenna_x=40.0, antenna_y=20.0, antenna_cable=70.0,
+         antenna_feed_from_end=15.0, nfc_cable=550.0,
+         travel_x=20.0, travel_y=16.0, slider_x=0.0, slider_y=0.0,
+         lid_corner_r=5.0, base_corner_r=3.0, tray_corner_r=1.2,
+         rim_round_r=0.35, print_edge_chamfer=0.6,
+         snap_wall=1.2, snap_gap=.4, snap_overlap=.45, snap_z_gap=.25,
+         esp_side_clearance=.4, esp_capture_gap=.35, esp_flex_slot=.8)
+
+os.makedirs(OUT, exist_ok=True)
+os.makedirs(os.path.join(OUT, 'stl'), exist_ok=True)
+doc = App.newDocument('Vesimittari_NFC_v1_3')
+doc.Label = 'Vesimittari – v1.3 / napsautuskansi ja ESP32-lukitus'
+parts = doc.addObject('App::DocumentObjectGroup', 'Tulostettavat')
+refs = doc.addObject('App::DocumentObjectGroup', 'Sovitusmallit')
+refs.Label = 'Vertailuosat – EI TULOSTETA'
+params = doc.addObject('Spreadsheet::Sheet', 'Mitat')
+params.Label = 'Mitat ja oletukset (makron lähtöarvot)'
+params.set('A1', 'Parametri'); params.set('B1', 'mm / arvo')
+for i, (k, v) in enumerate(P.items(), 2):
+    params.set('A'+str(i), k); params.set('B'+str(i), str(v))
+params.set('D1', 'Muuta mitat FCMacro-tiedostoon ja suorita uudelleen.')
+params.set('D2', 'Taulukko dokumentoi lähtöarvot; ei ohjaa geometriaa.')
+params.set('D3', '35 mm = kaapin tasosta näytön tasolle, ei koko mittarin korkeus.')
+params.set('D4', 'NFC PCB paksuus 1.6 mm ja komponenttitila 6 mm: oletukset.')
+params.setColumnWidth('A', 260); params.setColumnWidth('B', 110)
+params.setColumnWidth('D', 660)
+
+V = App.Vector
+def box(x, y, z, a, b, c):
+    return Part.makeBox(a, b, c, V(x, y, z))
+def near(a,b):
+    return abs(a-b)<1e-5
+def round_box(x,y,z,a,b,c,r):
+    s=box(x,y,z,a,b,c)
+    edges=[e for e in s.Edges if near(e.BoundBox.ZLength,c)]
+    return s.makeFillet(r,edges)
+def level_edges(shape,z):
+    return [e for e in shape.Edges
+            if near(e.BoundBox.ZMin,z) and near(e.BoundBox.ZMax,z)]
+def round_level(shape,z,r):
+    return shape.makeFillet(r,level_edges(shape,z))
+def cyl(x, y, z, r, h):
+    return Part.makeCylinder(r, h, V(x, y, z))
+def union(shapes):
+    return shapes[0].multiFuse(shapes[1:]).removeSplitter() if len(shapes)>1 else shapes[0]
+def ring(x, y, z, a, b, h, t):
+    return box(x,y,z,a,b,h).cut(box(x+t,y+t,z-0.1,a-2*t,b-2*t,h+0.2))
+def prism(points, vector):
+    wire = Part.makePolygon([V(*q) for q in points]+[V(*points[0])])
+    return Part.Face(wire).extrude(V(*vector))
+def shift(shape, x=0, y=0, z=0):
+    s=shape.copy(); s.translate(V(x,y,z)); return s
+def rotate(shape, axis, deg):
+    s=shape.copy(); s.rotate(V(0,0,0),V(*axis),deg); return s
+def bed(shape, rotation=None):
+    s=shape.copy()
+    if rotation: s.rotate(V(0,0,0),V(*rotation[0]),rotation[1])
+    b=s.BoundBox; s.translate(V(-b.XMin,-b.YMin,-b.ZMin)); return s
+
+objects = []
+print_specs = []
+palette = dict(base=(0.22,0.30,0.38), bridge=(0.12,0.58,0.66),
+               tray=(0.96,0.55,0.16), lock=(0.89,0.72,0.27), lid=(0.80,0.85,0.88))
+def part(name,label,shape,color,rotation=None,quantity=1,note=''):
+    s=shape.removeSplitter()
+    if not s.isValid() or len(s.Solids)!=1:
+        raise RuntimeError(name+' ei ole yksi ehjä solidi: '+str(len(s.Solids)))
+    o=doc.addObject('Part::Feature',name); o.Label=label; o.Shape=s
+    o.ViewObject.ShapeColor=color; o.ViewObject.LineColor=(0.12,0.16,0.20)
+    o.addProperty('App::PropertyString','Tulostus','Ohje'); o.Tulostus=note
+    o.addProperty('App::PropertyInteger','Kappalemaara','Ohje'); o.Kappalemaara=quantity
+    parts.addObject(o); objects.append(o)
+    print_specs.append((name,label,bed(s,rotation),color,quantity,note))
+    return o
+def ref(name,label,shape,color,trans=0):
+    o=doc.addObject('Part::Feature',name); o.Label=label; o.Shape=shape
+    o.ViewObject.ShapeColor=color; o.ViewObject.Transparency=trans; refs.addObject(o)
+    return o
+
+ix=P['meter_x']+2*P['fit_clearance']
+iy=P['meter_y']+2*P['fit_clearance']
+sx=ix+2*P['skirt_wall']; sy=iy+2*P['skirt_wall']
+dx=sx+9.2; dy=sy
+z=P['skirt_height']; dz=P['deck']; bz=z+dz
+bf=P['bridge_floor']; tz=bz+bf
+tx=P['nfc_x']+2*(P['pcb_clearance']+P['nfc_wall'])
+ty=P['nfc_y']+2*(P['pcb_clearance']+P['nfc_wall'])
+by=ty+5.8
+channel=ty+1.8
+xpos=P['slider_x']; ypos=P['slider_y']
+if abs(xpos)>P['travel_x'] or abs(ypos)>P['travel_y']:
+    raise ValueError('Kelkan sijainti ylittää suositellun säätöalueen')
+
+# Satula: tasainen yläkehä ja alaspäin ulottuva, aukoilla kevennetty kaulus.
+# Tulostetaan yläkehä alustaa vasten, jolloin kaikki kauluksen seinät kasvavat ylöspäin.
+deck=round_box(-dx/2,-dy/2,z,dx,dy,dz,P['base_corner_r']).cut(
+    box(-ix/2+3,-iy/2+3,z-.1,ix-6,iy-6,dz+.2))
+skirt=round_box(-sx/2,-sy/2,0,sx,sy,z+.1,2).cut(
+    box(-ix/2,-iy/2,-.1,ix,iy,z+.3))
+skirt=skirt.cut(box(-sx/2-1,-40,-.1,5,80,z+.2))
+skirt=skirt.cut(box(sx/2-5,-14,-.1,6,28,z+.2))
+base=deck.fuse(skirt)
+for xx in [-30,30]:
+    for sign in [-1,1]:
+        yy=sign*iy/2
+        base=base.cut(box(xx-4.4,yy-1.7,z-.2,8.8,3.4,dz+.4))
+post_xy=[(-49,-46.8),(49,-46.8),(-49,46.8),(49,46.8)]
+for xx,yy in post_xy:
+    base=base.cut(cyl(xx,yy,z-.1,1.7,dz+.2))
+base=round_level(base.removeSplitter(),0,.4)
+base_obj=part('01_Satula','01 · Mittarin satula / sovitusrengas',base,palette['base'],
+              ((1,0,0),180),note='Yläkehä alustaa vasten; tulosta ensin sovitukseen.')
+
+# Poikittaiskelkka: X-suunnan avoin ohjain. Tasaiset päätykorvat tukeutuvat satulaan.
+bridge=round_box(-dx/2,-by/2,bz,dx,by,bf,2).cut(
+    box(-50,-(ty-3.8)/2,bz-.1,100,ty-3.8,bf+.2))
+rails=[]
+for sign in [-1,1]:
+    y0=channel/2 if sign>0 else -by/2
+    rail=box(-50,y0,bz+bf,100,2,4.2)
+    rails.append(round_level(rail,bz+bf+4.2,.4))
+bridge=union([bridge]+rails)
+# Mekaaniset päätyrajoittimet estävät NFC-kelkkaa putoamasta X-suunnassa.
+for sign in [-1,1]:
+    endx=50 if sign>0 else -52
+    stop=box(endx,-by/2,bz+bf,2,10,2.4)
+    bridge=bridge.fuse(round_level(stop,bz+bf+2.4,.35))
+bridge=shift(bridge,y=ypos)
+bridge_obj=part('02_Poikittaiskelkka','02 · Y-liike ±16 mm / X-ohjain',bridge,palette['bridge'],
+               note='Tasainen rengaspohja alustaa vasten.')
+
+# NFC-korttipaikka. Kortin kiinnitys ei riipu epäselvistä reikäkoordinaateista.
+tray_h=P['tray_floor']+P['nfc_wall_height']
+tray=round_box(-tx/2,-ty/2,tz,tx,ty,tray_h,P['tray_corner_r'])
+tray=tray.cut(box(-tx/2+P['nfc_wall'],-ty/2+P['nfc_wall'],tz+P['tray_floor'],
+                  tx-2*P['nfc_wall'],ty-2*P['nfc_wall'],P['nfc_wall_height']+.1))
+tray=round_level(tray,tz+tray_h,P['rim_round_r'])
+# Avoin johtolovi liitinreunassa; ei sillattavaa kattoa.
+tray=tray.cut(box(tx/2-2.1,-7,tz+2.0,3,14,tray_h))
+# Käännetyn kortin johtolovi myös etureunassa; johdot voidaan nostaa ylös kannen lovesta.
+tray=tray.cut(box(-7,-ty/2-1,tz+2.0,14,3.1,tray_h))
+# Neljä pientä reunatukea: 0.4 mm komponenttivara PCB:n alla.
+for xx in [-P['nfc_x']/2,P['nfc_x']/2-2.0]:
+    for yy in [-P['nfc_y']/2,P['nfc_y']/2-2.0]:
+        tray=tray.fuse(box(xx,yy,tz+P['tray_floor'],2,2,.4))
+# Neljä ulkopuolista joustokynttä. Leveät jalat tulostuvat alustalle.
+# Kynnen alapuolinen 45° ramppi tukee seuraavia tulostuskerroksia.
+cover_z=tz+tray_h
+platform_top=cover_z+P['nfc_cover_thickness']
+tab_edge=tx/2+.5
+snap_inner=tab_edge+P['snap_gap']
+snap_outer=snap_inner+P['snap_wall']
+snap_tip=tab_edge-P['snap_overlap']
+snap_bottom=platform_top+P['snap_z_gap']-P['snap_gap']
+snap_nose_z=snap_bottom+(snap_inner-snap_tip)
+nfc_springs=[]
+for yy in [-14,14]:
+    foot=box(tx/2-.6,yy-4,tz,snap_outer-(tx/2-.6),8,1.2)
+    beam=box(snap_inner,yy-3.5,tz+1.0,P['snap_wall'],7,platform_top+2.2-(tz+1.0))
+    beam=round_level(beam,platform_top+2.2,.25)
+    nose=prism([(snap_inner,yy-3.5,snap_bottom),
+                (snap_tip,yy-3.5,snap_nose_z),
+                (snap_tip,yy-3.5,snap_nose_z+.25),
+                (snap_inner,yy-3.5,snap_nose_z+.25+snap_inner-snap_tip)],(0,7,0))
+    spring=union([foot,beam,nose])
+    nfc_springs.extend([spring,rotate(spring,(0,0,1),180)])
+    # Y-suunnan ohjaimet rajaavat kannen leveät sivukorvat 0.4 mm välyksellä.
+    for gy in [yy-5.4,yy+4.2]:
+        guide=box(tx/2-.2,gy,tz,1.6,1.2,platform_top-tz)
+        # Ohjaimen alapää liittyy seinään; yläosa ohittaa kannen perusreunan.
+        guide=guide.cut(box(tx/2-.3,gy-.1,cover_z-.1,.6,1.4,2))
+        tray=tray.fuse(guide).fuse(rotate(guide,(0,0,1),180))
+tray=union([tray]+nfc_springs)
+tray=shift(tray,x=xpos,y=ypos-.6)
+tray_obj=part('03_NFC_kelkka','03 · NFC-kortin liukukotelo / X ±20 mm',tray,palette['tray'],
+              note='Ohut pohja alustaa vasten. NFC-kortti antennipuoli mittariin.')
+
+# X-lukitus: vaakasuunnassa kapeneva kiila takaseinän ja kelkan välissä.
+# Paksumpi pää jää korttikelkan päädyn ulkopuolelle.
+wy=channel/2
+wx=tx/2-12
+lockx=prism([(wx,wy,tz),(wx+24,wy,tz),(wx+24,wy-2.5,tz),(wx,wy-.5,tz)],(0,0,3.0))
+lockx=lockx.makeFillet(.35,[e for e in lockx.Edges
+    if near(e.BoundBox.XMin,wx+24) and near(e.BoundBox.XMax,wx+24)
+    and near(e.BoundBox.ZLength,3)])
+lockx=shift(lockx,x=xpos,y=ypos)
+xlock_obj=part('04_X_kiila','04 · X-säädön kitkakiila',lockx,palette['lock'],
+               note='Tasainen alapinta alustalle. Työnnä kevyesti, kunnes kelkka lukittuu.')
+
+# Kaksi sivulta työnnettävää C-puristinta; profiili tulostetaan kyljellään.
+clip=union([box(dx/2-4.2,-5,z-1.5,8.2,10,1.5),
+            box(dx/2-5.2,-5,tz+2.6,9.2,10,1.5),
+            box(dx/2+.8,-5,z-1.5,3.2,10,(tz+4.1)-(z-1.5))])
+clip=clip.makeFillet(.6,[e for e in clip.Edges if near(e.BoundBox.YLength,10)
+    and (near(e.CenterOfMass.z,z-1.5) or near(e.CenterOfMass.z,tz+4.1))])
+clip=shift(clip,y=ypos)
+clip_obj=part('05_C_puristin','05 · Y-säädön C-puristin, oikea',clip,palette['lock'],
+              ((1,0,0),90),quantity=2,note='C-profiilin sivupinta alustalle; 2 kpl.')
+left=rotate(clip,(0,0,1),180)
+left=shift(left,y=2*ypos)
+o=doc.addObject('Part::Feature','C_puristin_vasen');o.Label='05b · Y-puristin, vasen';o.Shape=left
+o.ViewObject.ShapeColor=palette['lock'];parts.addObject(o);objects.append(o)
+
+# Y-lukituksen kiila: kalteva yläpinta, ei kierrettä eikä metallia.
+wx0=dx/2-4.2
+wedge=prism([(wx0,-10,tz),(wx0,14,tz),(wx0,14,tz+3.35),(wx0,-10,tz+1.35)],(4.0,0,0))
+wedge=wedge.makeFillet(.5,[e for e in wedge.Edges if near(e.BoundBox.XLength,4)
+    and near(e.CenterOfMass.y,14) and near(e.CenterOfMass.z,tz+3.35)])
+wedge=shift(wedge,y=ypos)
+wedge_obj=part('06_Y_kiila','06 · Y-puristimen kiristyskiila, oikea',wedge,palette['lock'],
+               quantity=2,note='Tasainen pohja alustalle; 2 kpl. Kiristetään sormin.')
+leftw=rotate(wedge,(0,0,1),180);leftw=shift(leftw,y=2*ypos)
+o=doc.addObject('Part::Feature','Y_kiila_vasen');o.Label='06b · Y-kiila, vasen';o.Shape=leftw
+o.ViewObject.ShapeColor=palette['lock'];parts.addObject(o);objects.append(o)
+
+# Neljä kauluksen sovituskiilaa. Työnnetään ylhäältä kehän aukkoihin.
+# 0.2...1.4 mm työpaksuus; ulkoreuna suora, jotta kiila painaa mittarin sivua.
+mount=prism([(-4,iy/2,1),(-4,iy/2,z+dz),
+             (-4,iy/2-1.4,z+dz),(-4,iy/2-.2,1)],(8,0,0))
+mount=mount.fuse(box(-4,iy/2-1.4,z+dz,8,4.4,1.5))
+mount=mount.removeSplitter()
+mount=mount.makeFillet(.45,[e for e in mount.Edges if near(e.BoundBox.XLength,8)
+    and near(e.CenterOfMass.z,z+dz+1.5)])
+# Esityksessä kiilat ovat 6 mm ylhäällä, juuri ennen kiristystä.
+mount=shift(mount,x=-30,z=6)
+mount_obj=part('07_Sovituskiila','07 · Mittarikiinnityksen sovituskiila',mount,palette['lock'],
+               ((0,1,0),90),quantity=4,note='Leveä sivuprofiili alustaa vasten; 4 kpl. Sovita kevyesti.')
+for n,(xx,sgn) in enumerate([(30,1),(-30,-1),(30,-1)],2):
+    s=shift(mount,x=30)
+    if sgn<0:s=rotate(s,(0,0,1),180)
+    s=shift(s,x=xx)
+    o=doc.addObject('Part::Feature','Sovituskiila_'+str(n));o.Label='07'+str(n)+' · Sovituskiila';o.Shape=s
+    o.ViewObject.ShapeColor=palette['lock'];parts.addObject(o);objects.append(o)
+
+# Kansi tehdään paikallisessa tulostuskoordinaatistossa (ulkopinta z=0).
+# Kokoonpanossa käännetään ympäri; sisällä antennin tasainen alusta.
+roof=36.0; cover_x=128.0; cover_y=110.0; cover_h=26.4
+lid=round_box(-cover_x/2,-cover_y/2,0,cover_x,cover_y,cover_h,P['lid_corner_r'])
+lid=lid.cut(round_box(-cover_x/2+2,-cover_y/2+2,2,cover_x-4,cover_y-4,
+                     cover_h,P['lid_corner_r']-2))
+# Alustaa vasten tuleva ulkoreuna on 45° viiste: ensimmäiset kerrokset tukevat toisiaan.
+lid=lid.makeChamfer(P['print_edge_chamfer'],level_edges(lid,0))
+lid=round_level(lid,cover_h,.5)
+# USB-/virtakaapelin avoin alareunalovi, tulostuksessa ylöspäin avoin.
+usb_cut=box(-9,cover_y/2-3,4.0,18,4,cover_h)
+usb_cut=usb_cut.makeFillet(1.5,[e for e in usb_cut.Edges
+    if near(e.BoundBox.YLength,4) and near(e.CenterOfMass.z,4)])
+lid=lid.cut(usb_cut)
+# Kannen pitkät ohjaustolpat ja kevyet kitkatapit satulan kulmareikiin.
+for xx,yy in post_xy:
+    lid=lid.fuse(cyl(xx,-yy,2,3.2,roof-bz-2))
+    # Neljä rakoa tekevät tapista joustavan. Nimellinen halkaisija 3.5 / reikä 3.4.
+    pin=cyl(xx,-yy,roof-bz,1.75,1.5)
+    pin=pin.cut(box(xx-.45,-yy-2,roof-bz+.2,.9,4,1.5))
+    pin=pin.cut(box(xx-2,-yy-.45,roof-bz+.2,4,.9,1.5))
+    lid=lid.fuse(pin)
+# NFC-kelkan irrotettava napsautuskansi, jonka yläpinnassa ESP32:n joustopidike.
+# Kannen alapuoli on täysin tasainen: tulostetaan alapinta alustaa vasten.
+platform_top=cover_z+P['nfc_cover_thickness']
+platform_width=tx+1.0
+platform=round_box(-tx/2,-ty/2,cover_z,tx,ty,
+                   P['nfc_cover_thickness'],2)
+platform=round_level(platform,platform_top,.3)
+for yy in [-14,14]:
+    tab=box(tx/2-.8,yy-3.8,cover_z,1.3,7.6,P['nfc_cover_thickness'])
+    platform=platform.fuse(tab).fuse(rotate(tab,(0,0,1),180))
+platform=platform.cut(box(-7.5,-ty/2-1,cover_z-.1,15,5,P['nfc_cover_thickness']+.2))
+platform=platform.cut(box(tx/2-4,-5,cover_z-.1,8,10,P['nfc_cover_thickness']+.2))
+ecx=0.0; ecy=0.0
+ew=P['esp_x']+2*P['esp_side_clearance']; el=P['esp_y']+.8
+ex=ecx-ew/2; ey=ecy-el/2
+def esp_local(s):
+    # USB tulee mittarin etureunan (-Y) suuntaan.
+    return shift(rotate(s,(0,0,1),180),z=platform_top-2)
+def on_carriage(s):
+    return shift(s,x=xpos,y=ypos-.6)
+def esp_installed(s):
+    return on_carriage(esp_local(s))
+# Kaksi pitkää, kannen tasossa joustavaa vartta. U-raot kulkevat kansilevyn läpi,
+# joten varren lattia ei estä joustoa. Kaikki tulostuu pohjasta ylöspäin.
+esp_inner=ew/2
+esp_outer=esp_inner+P['snap_wall']
+esp_slot=P['esp_flex_slot']
+esp_top=2.8+P['esp_thickness']
+esp_tip=P['esp_x']/2-P['snap_overlap']
+esp_ramp_z=esp_top+P['esp_capture_gap']-P['esp_side_clearance']
+esp_nose_z=esp_ramp_z+(esp_inner-esp_tip)
+esp_parts=[]
+for sign in [-1,1]:
+    def mirror_esp(s):
+        # Peilaa X-suunnassa säilyttäen USB-pään suunnan.
+        if sign>0:return s
+        matrix=App.Matrix();matrix.A11=-1
+        return s.transformGeometry(matrix)
+    for xx in [esp_inner-esp_slot,esp_outer]:
+        slot=box(xx,-9,2-P['nfc_cover_thickness']-.1,esp_slot,17.5,P['nfc_cover_thickness']+.2)
+        platform=platform.cut(esp_local(mirror_esp(slot)))
+    end_slot=box(esp_inner-esp_slot,-9,2-P['nfc_cover_thickness']-.1,
+                 P['snap_wall']+2*esp_slot,1,P['nfc_cover_thickness']+.2)
+    platform=platform.cut(esp_local(mirror_esp(end_slot)))
+    arm=box(esp_inner,-8,2,P['snap_wall'],18.5,2.8)
+    # Korkea lukitushammas vain varren vapaassa päässä: sivujuotoksille avoin tila.
+    pillar=box(esp_inner,-8,2,P['snap_wall'],2.8,6.4)
+    hook=prism([(esp_inner,-8,esp_ramp_z),
+                (esp_tip,-8,esp_nose_z),(esp_tip,-8,esp_nose_z+.25),
+                (esp_inner,-8,esp_nose_z+.25+esp_inner-esp_tip)],(0,2.8,0))
+    esp_parts.append(mirror_esp(union([arm,pillar,hook])))
+    # USB-pään kiinteä kynsi: kortti pujotetaan ensin tämän alle vinossa.
+    back=box(esp_inner,9.4,2,1.4,2.7,6.4)
+    fixed_hook=prism([(esp_inner,9.8,esp_ramp_z),
+                      (esp_tip,9.8,esp_nose_z),(esp_tip,9.8,esp_nose_z+.25),
+                      (esp_inner,9.8,esp_nose_z+.25+esp_inner-esp_tip)],(0,1.8,0))
+    esp_parts.append(mirror_esp(back.fuse(fixed_hook)))
+    # Kortin Y-ohjaimet jättävät 14.5 mm leveät USB- ja johtoreitit.
+    for yy in [-12.1,10.9]:
+        esp_parts.append(mirror_esp(box(7.25,yy,2,3.45,1.2,2.8)))
+    for yy in [-10.3,8.7]:
+        esp_parts.append(mirror_esp(box(6.7,yy,2,2,1.6,.8)))
+holder=Part.makeCompound(esp_parts)
+platform=union([platform]+[esp_local(s) for s in esp_parts])
+platform_obj=part('10_NFC_kansi_ESP_pidike','10 · NFC-kansi + ESP32-C3-pidike',
+                 on_carriage(platform),palette['lid'],
+                 note='PETG, tasainen alapinta alustalle. NFC-kansi napsautetaan kelkan kynsiin; ESP32 pujotetaan USB-pää edellä kiinteiden kynsien alle ja painetaan alas.')
+# Wi-Fi-antennin neljä sijoitusmerkkiä, 40 x 20 mm liimapinta jää tasaiseksi.
+ax=-20.0; ay=-5.0
+for xx,yy in [(ax-1,ay-1),(ax+41,ay-1),(ax-1,ay+21),(ax+41,ay+21)]:
+    lid=lid.fuse(box(xx-.5,yy-.5,2,1,1,1))
+# Kaapelilenkin ohjaintapit: NFC-johdon ylimäärä jää kannen sisään.
+for xx in [-34,34]:lid=lid.fuse(cyl(xx,-40,2,4,5))
+
+def installed_lid(s):
+    return shift(rotate(s,(1,0,0),180),z=roof)
+lid_obj=part('08_Kansi','08 · Suojakansi / Wi-Fi-antenni',installed_lid(lid),palette['lid'],
+             ((1,0,0),180),note='Laaja ulkopinta alustalle, avoin sisäpuoli ylöspäin.')
+
+# Vertailuosat: ainoastaan annettujen päämittojen mukaisia tilavarauksia.
+meter=box(-P['meter_x']/2,-P['meter_y']/2,z-35,P['meter_x'],P['meter_y'],35)
+meter_obj=ref('Mittari','Mittari 98 × 96 / näyttötaso +35 (yksinkertaistus)',meter,(.70,.72,.69),65)
+screen=ref('Naytto','Näyttö – sijainti vain havainnollinen',box(-43,-35,z+.05,28,70,.15),(.12,.20,.24),20)
+nfcz=tz+P['tray_floor']+.4
+nfc=box(-P['nfc_x']/2,-P['nfc_y']/2,nfcz,P['nfc_x'],P['nfc_y'],1.6)
+nfc=shift(nfc,x=xpos,y=ypos-.6)
+nfc_obj=ref('NFC_PCB','NFC PCB X42.6 × Y40.5 / paksuus oletus 1.6',nfc,(.75,.12,.12))
+ref('NFC_komponentit','NFC komponenttien tilavaraus, 6 mm oletus',
+    shift(box(-14,-14,nfcz+1.6,28,28,4.4),x=xpos,y=ypos-.6),(.22,.22,.25),35)
+esp=box(ecx-P['esp_x']/2,ecy-P['esp_y']/2,2.8,P['esp_x'],P['esp_y'],P['esp_thickness'])
+esp_obj=ref('ESP32_PCB','ESP32-C3 17.8 × 21 × 3.5 – NFC-kannen päällä',esp_installed(esp),(.12,.40,.25))
+usb=box(-6,P['esp_y']/2,3.0,12,22,6)
+usb_obj=ref('USB_tilavaraus','USB-pistokkeen tilavaraus 12 × 22 × 6 (oletus)',
+            esp_installed(usb),(.18,.18,.20),65)
+ant=box(ax,ay,2.05,40,20,.2)
+ant_obj=ref('WiFi_antenni','Liima-antenni 40 × 20 / kaapeli 70',installed_lid(ant),(.12,.12,.14))
+feed=V(ax+P['antenna_feed_from_end'],-ay-10,roof-2.7)
+conn=V(xpos-5.5,ypos-.6+7,platform_top+2.5)
+def coax_route(xx,yy):
+    start=V(xx-5.5,yy-.6+7,platform_top+2.5)
+    rear=V(start.x,start.y+9,platform_top+5.4)
+    above=V(rear.x,rear.y,31.0)
+    return Part.makePolygon([start,rear,above,feed])
+wire=coax_route(xpos,ypos)
+coax_obj=ref('Antennikaapeli','70 mm koaksiaali – ESP32-kelkasta ulkokannen antenniin',wire,(.1,.1,.1))
+coax_obj.ViewObject.LineWidth=3.0
+
+# Liike- ja sovitustiedot luettavissa FreeCADin ominaisuusnäkymässä.
+for o in [bridge_obj,tray_obj]:
+    o.addProperty('App::PropertyString','Saatoalue','Ohje')
+bridge_obj.Saatoalue='Y -16...+16 mm, kaksi C-puristinta + kiilat'
+tray_obj.Saatoalue='X -20...+20 mm, takareunan kitkakiila'
+base_obj.addProperty('App::PropertyString','Sovitus','Ohje')
+base_obj.Sovitus='Sisätila 99.2 × 97.2; kaulus 8 mm; saranan aukko 80 mm, lukitusaukko 28 mm. Sovituskoe tarvitaan.'
+
+# Geometrian ja STL:n tarkistus sekä vienti.
+report={'revision':'1.3','parameters':P,'parts':[],'warnings':[
+    'Mittarin kulmasäteitä, saranan ja lukituksen ulkonemia ei ole mitattu.',
+    'NFC-kortin paksuus, alapinnan komponentit ja liittimen korkeus varmistettava.',
+    'Napsautuskynsien käytännön jousto ja pitovoima varmistetaan PETG-sovitustulosteella.',
+    'Ei tiivistetty tai IP-luokiteltu kotelo. Sovituskiilat esitetty 6 mm ylhäällä.',
+    'NFC-kortin reikien 7 mm reunamittaa ei käytetä ilman reikien täydellisiä koordinaatteja.'
+]}
+for name,label,s,color,count,note in print_specs:
+    mesh=MeshPart.meshFromShape(Shape=s,LinearDeflection=.08,AngularDeflection=.18,Relative=False)
+    if not mesh.isSolid():raise RuntimeError(name+' STL ei ole suljettu')
+    mesh.write(os.path.join(OUT,'stl',name+'.stl'))
+    bb=s.BoundBox
+    report['parts'].append(dict(name=name,label=label,quantity=count,
+        size_mm=[round(bb.XLength,2),round(bb.YLength,2),round(bb.ZLength,2)],
+        volume_mm3=round(s.Volume,2),valid=s.isValid(),solids=len(s.Solids),
+        mesh_closed=mesh.isSolid(),print_note=note))
+report['nfc_pcb_plane_above_meter_mm']=round(nfcz-z,2)
+report['nfc_component_to_cover_clearance_mm']=round(cover_z-(nfcz+6),2)
+report['esp_holder_to_outer_cover_clearance_mm']=round(roof-2-platform_obj.Shape.BoundBox.ZMax,2)
+report['snap_geometry']={'nfc_overlap_mm':P['snap_overlap'],
+    'nfc_side_clearance_mm':P['snap_gap'],'nfc_vertical_clearance_mm':P['snap_z_gap'],
+    'esp_overlap_mm':P['snap_overlap'],'esp_side_clearance_mm':P['esp_side_clearance'],
+    'esp_vertical_clearance_mm':P['esp_capture_gap'],'esp_spring_slot_mm':P['esp_flex_slot']}
+report['antenna_route_mm']=round(wire.Length,2)
+report['overall_assembled_mm']=[cover_x,cover_y,roof]
+with open(os.path.join(OUT,'tarkistus.json'),'w') as f:json.dump(report,f,indent=2,ensure_ascii=False)
+
+doc.recompute()
+# Oletusnäkymä: napsautuskansi ja ESP32:n kiinnitys näkyvät.
+for o in [lid_obj,ant_obj,coax_obj,usb_obj]:o.ViewObject.Visibility=False
+Gui.activeDocument().activeView().viewAxonometric();Gui.activeDocument().activeView().fitAll()
+Gui.activeDocument().activeView().saveImage(os.path.join(OUT,'mekanismi.png'),1600,1200,'White')
+lid_obj.ViewObject.Visibility=True
+Gui.activeDocument().activeView().fitAll()
+Gui.activeDocument().activeView().saveImage(os.path.join(OUT,'kotelo_suljettu.png'),1600,1200,'White')
+lid_obj.ViewObject.Visibility=False
+Gui.activeDocument().activeView().fitAll()
+doc.recompute();doc.saveAs(os.path.join(OUT,'Vesimittari_NFC.FCStd'))
+Part.export(objects,os.path.join(OUT,'Vesimittari_NFC.step'))
+
+# Erillinen tulostusasetteludokumentti: kaikki kappaleet pohja z=0.
+layout=App.newDocument('Vesimittari_Tulostus')
+layout.Label='Vesimittari – kaikki tulostettavat osat'
+px=0;py=0;row=0
+for name,label,s,color,count,note in print_specs:
+    for i in range(count):
+        b=s.BoundBox
+        if px+b.XLength>285: px=0;py+=row+8;row=0
+        o=layout.addObject('Part::Feature',name+'_'+str(i+1));o.Label=label+' / '+str(i+1)
+        o.Shape=shift(s,x=px,y=py);o.ViewObject.ShapeColor=color
+        px+=b.XLength+8;row=max(row,b.YLength)
+layout.recompute()
+Gui.activeDocument().activeView().viewAxonometric();Gui.activeDocument().activeView().fitAll()
+Gui.activeDocument().activeView().saveImage(os.path.join(OUT,'tulostusosat.png'),1600,1200,'White')
+layout.saveAs(os.path.join(OUT,'Tulostusosat.FCStd'))
+App.setActiveDocument(doc.Name)
+Gui.activeDocument().activeView().viewAxonometric();Gui.activeDocument().activeView().fitAll()
+print('VALMIS:',OUT)
+print('Tulostettavat tyypit:',len(print_specs),'kappaleet:',sum(t[4] for t in print_specs))
+print('NFC piirilevyn alapinnan etäisyys mittarin tasosta:',round(nfcz-z,2),'mm')
+print('Wi-Fi kaapelin havainnollinen reitti:',round(wire.Length,2),'mm / 70 mm')
+
+# Tarkista osien tahattomat tilavuusleikkaukset ja liikealueen yhdeksän pistettä.
+import itertools
+collisions=[]
+for a,b in itertools.combinations(objects,2):
+    if a.Shape.BoundBox.intersect(b.Shape.BoundBox):
+        volume=a.Shape.common(b.Shape).Volume
+        if volume>.001:
+            collisions.append(dict(a=a.Label,b=b.Label,volume=round(volume,4)))
+fixed=[base_obj.Shape,lid_obj.Shape]+[
+    o.Shape for o in objects if 'Sovituskiila' in o.Name]
+travel_results=[]
+coax_results=[]
+for xx in [-P['travel_x'],0,P['travel_x']]:
+    for yy in [-P['travel_y'],0,P['travel_y']]:
+        mx=xx-xpos; my=yy-ypos
+        moving=[shift(bridge_obj.Shape,y=my),shift(tray_obj.Shape,x=mx,y=my),
+                shift(xlock_obj.Shape,x=mx,y=my),shift(clip_obj.Shape,y=my),
+                 shift(wedge_obj.Shape,y=my),shift(left,y=my),shift(leftw,y=my),
+                  shift(platform_obj.Shape,x=mx,y=my)]
+        moving.extend(shift(o.Shape,x=mx,y=my) for o in
+                      [esp_obj,nfc_obj,doc.getObject('NFC_komponentit'),usb_obj])
+        bad=[]
+        for i,s in enumerate(moving):
+            for j,t in enumerate(fixed):
+                if s.BoundBox.intersect(t.BoundBox):
+                    volume=s.common(t).Volume
+                    if volume>.001:bad.append(('fixed',i,j,round(volume,4)))
+        for (i,s),(j,t) in itertools.combinations(enumerate(moving),2):
+            if s.BoundBox.intersect(t.BoundBox):
+                volume=s.common(t).Volume
+                if volume>.001:bad.append(('moving',i,j,round(volume,4)))
+        travel_results.append(dict(x=xx,y=yy,intersections=bad))
+        route=coax_route(xx,yy)
+        cable_segments=[]
+        for edge in route.Edges:
+            start=edge.Vertexes[0].Point;end=edge.Vertexes[-1].Point
+            cable_segments.append(Part.makeCylinder(.35,(end-start).Length,start,end-start))
+        cable=Part.makeCompound(cable_segments)
+        cable_collisions=[]
+        for k,s in enumerate(fixed+moving[:8]):
+            volume=cable.common(s).Volume
+            if volume>.001:cable_collisions.append((k,round(volume,4)))
+        coax_results.append(dict(x=xx,y=yy,route_mm=round(route.Length,2),
+                                 spare_mm=round(P['antenna_cable']-route.Length,2),
+                                 plastic_intersections=cable_collisions))
+report['assembly_interference_mm3']=collisions
+report['travel_tests']=travel_results
+report['coax_motion_tests']=coax_results
+report['press_fit_note']='Ulkokannen sovite 3.5 / 3.4 mm. NFC-kansi ja ESP32 lukittuvat muotoon: 0.45 mm kynnen limitys, levossa ei tilavuusleikkauksia.'
+# Kortin USB-pään pujotus kiinteiden kynsien alle, USB-johto irrotettuna.
+inserted=esp.copy()
+inserted.rotate(V(0,P['esp_y']/2,esp_top),V(1,0,0),-22)
+insertion_overlap=esp_installed(inserted).common(platform_obj.Shape).Volume
+report['esp_insertion_test']={'tilt_degrees':22,'overlap_mm3':round(insertion_overlap,6)}
+nfc_capture=shift(platform_obj.Shape,z=.7).common(tray_obj.Shape).Volume
+esp_capture=shift(esp_obj.Shape,z=.8).common(platform_obj.Shape).Volume
+report['snap_retention_tests']={
+    'seated_nfc_intersection_mm3':round(platform_obj.Shape.common(tray_obj.Shape).Volume,6),
+    'seated_esp_intersection_mm3':round(esp_obj.Shape.common(platform_obj.Shape).Volume,6),
+    'nfc_lift_0_7_mm_blocked_volume_mm3':round(nfc_capture,6),
+    'esp_lift_0_8_mm_blocked_volume_mm3':round(esp_capture,6)}
+with open(os.path.join(OUT,'tarkistus.json'),'w') as f:
+    json.dump(report,f,indent=2,ensure_ascii=False)
+assert all(not r['intersections'] for r in travel_results), 'Liikealueella törmäys'
+assert all(r['spare_mm']>=8 and not r['plastic_intersections'] for r in coax_results), 'Antennikaapelin reitti tarkistettava'
+assert insertion_overlap<.001, 'ESP32:n vino pujotus osuu pidikkeeseen'
+assert nfc_capture>.1 and esp_capture>.1, 'Kynsien muotolukitus ei pidätä nostoa'
+
+# Havainne: NFC-kansi ja ESP32 nostettu kelkan ylle, ulkokansi vieressä.
+presentation=App.newDocument('Vesimittari_Havainne')
+presentation.Label='Vesimittari – NFC / kansi / ESP32, räjäytyskuva'
+for src in objects:
+    if src==lid_obj:continue
+    obj=presentation.addObject('Part::Feature',src.Name)
+    lift=12 if src==platform_obj else 0
+    obj.Label=src.Label;obj.Shape=shift(src.Shape,z=lift)
+    obj.ViewObject.ShapeColor=src.ViewObject.ShapeColor
+for src in [meter_obj,screen,nfc_obj,doc.getObject('NFC_komponentit'),esp_obj]:
+    obj=presentation.addObject('Part::Feature',src.Name)
+    obj.Label=src.Label;obj.Shape=shift(src.Shape,z=12 if src==esp_obj else 0)
+    obj.ViewObject.ShapeColor=src.ViewObject.ShapeColor
+    obj.ViewObject.Transparency=src.ViewObject.Transparency
+for nm,sh,col in [('Kansi_auki',lid,palette['lid']),('WiFi_antenni',ant,(.12,.12,.14))]:
+    obj=presentation.addObject('Part::Feature',nm)
+    obj.Shape=shift(sh,x=145,y=-2);obj.ViewObject.ShapeColor=col
+presentation.recompute()
+Gui.activeDocument().activeView().viewAxonometric();Gui.activeDocument().activeView().fitAll()
+Gui.activeDocument().activeView().saveImage(os.path.join(OUT,'kokonaisuus.png'),1800,1100,'White')
+presentation.saveAs(os.path.join(OUT,'Havainne.FCStd'))
+App.setActiveDocument(doc.Name)
+# Lähikuva integroiduista NFC-kannen ja ESP32:n joustokynsistä.
+preview_objects=objects+list(refs.Group)
+preview_visibility=[(o,o.ViewObject.Visibility) for o in preview_objects]
+for o in preview_objects:o.ViewObject.Visibility=False
+for o in [tray_obj,platform_obj,esp_obj]:o.ViewObject.Visibility=True
+Gui.activeDocument().activeView().viewAxonometric();Gui.activeDocument().activeView().fitAll()
+Gui.activeDocument().activeView().saveImage(os.path.join(OUT,'nfc_kansi_esp32.png'),1400,1000,'White')
+for o,visible in preview_visibility:o.ViewObject.Visibility=visible
+Gui.activeDocument().activeView().fitAll()
+print('Tarkistus: liikealue vapaa kaikissa yhdeksässä tarkistuspisteessä.')

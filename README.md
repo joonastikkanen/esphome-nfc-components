@@ -4,6 +4,16 @@ These components add functionality to read NFC tags in multiple parts.
 
 Original discussion: https://community.home-assistant.io/t/water-meter-reading-via-nfc/626124/20
 
+## Printable enclosure and assembly
+
+The v1.3 enclosure's nine STL part types, editable FreeCAD documents, STEP export,
+and reference images are in [`hardware/vesimittari_v1_3/`](hardware/vesimittari_v1_3/README.md).
+See the **[English printing and assembly guide](docs/assembly.md)** for the
+14-piece print list, fit checks, wiring, antenna adjustment, and snap-fit removal.
+The enclosure is dimensioned for specific small PCBs and a 98 × 96 mm meter
+reference; check your real hardware before printing. Geometric checks are not
+proof of physical fit or waterproofing.
+
 ## Watermeter NFC Reader
 
 Patched configuration and external components. **Built and installed by OTA on

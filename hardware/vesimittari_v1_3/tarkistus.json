@@ -1,0 +1,336 @@
+{
+  "revision": "1.3",
+  "parameters": {
+    "meter_x": 98.0,
+    "meter_y": 96.0,
+    "meter_height_above_cabinet": 35.0,
+    "fit_clearance": 0.6,
+    "skirt_height": 8.0,
+    "skirt_wall": 3.0,
+    "deck": 1.6,
+    "bridge_floor": 0.8,
+    "tray_floor": 0.8,
+    "nfc_x": 42.6,
+    "nfc_y": 40.5,
+    "pcb_clearance": 0.6,
+    "nfc_wall": 1.6,
+    "nfc_cover_thickness": 1.2,
+    "nfc_wall_height": 7.2,
+    "esp_x": 17.8,
+    "esp_y": 21.0,
+    "esp_thickness": 3.5,
+    "antenna_x": 40.0,
+    "antenna_y": 20.0,
+    "antenna_cable": 70.0,
+    "antenna_feed_from_end": 15.0,
+    "nfc_cable": 550.0,
+    "travel_x": 20.0,
+    "travel_y": 16.0,
+    "slider_x": 0.0,
+    "slider_y": 0.0,
+    "lid_corner_r": 5.0,
+    "base_corner_r": 3.0,
+    "tray_corner_r": 1.2,
+    "rim_round_r": 0.35,
+    "print_edge_chamfer": 0.6,
+    "snap_wall": 1.2,
+    "snap_gap": 0.4,
+    "snap_overlap": 0.45,
+    "snap_z_gap": 0.25,
+    "esp_side_clearance": 0.4,
+    "esp_capture_gap": 0.35,
+    "esp_flex_slot": 0.8
+  },
+  "parts": [
+    {
+      "name": "01_Satula",
+      "label": "01 · Mittarin satula / sovitusrengas",
+      "quantity": 1,
+      "size_mm": [
+        114.4,
+        103.2,
+        9.6
+      ],
+      "volume_mm3": 12090.14,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Yläkehä alustaa vasten; tulosta ensin sovitukseen."
+    },
+    {
+      "name": "02_Poikittaiskelkka",
+      "label": "02 · Y-liike ±16 mm / X-ohjain",
+      "quantity": 1,
+      "size_mm": [
+        114.4,
+        50.7,
+        5.0
+      ],
+      "volume_mm3": 3110.13,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Tasainen rengaspohja alustaa vasten."
+    },
+    {
+      "name": "03_NFC_kelkka",
+      "label": "03 · NFC-kortin liukukotelo / X ±20 mm",
+      "quantity": 1,
+      "size_mm": [
+        51.2,
+        44.9,
+        11.4
+      ],
+      "volume_mm3": 4020.46,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Ohut pohja alustaa vasten. NFC-kortti antennipuoli mittariin."
+    },
+    {
+      "name": "04_X_kiila",
+      "label": "04 · X-säädön kitkakiila",
+      "quantity": 1,
+      "size_mm": [
+        24.0,
+        2.47,
+        3.0
+      ],
+      "volume_mm3": 107.83,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Tasainen alapinta alustalle. Työnnä kevyesti, kunnes kelkka lukittuu."
+    },
+    {
+      "name": "05_C_puristin",
+      "label": "05 · Y-säädön C-puristin, oikea",
+      "quantity": 2,
+      "size_mm": [
+        9.2,
+        8.0,
+        10.0
+      ],
+      "volume_mm3": 417.91,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "C-profiilin sivupinta alustalle; 2 kpl."
+    },
+    {
+      "name": "06_Y_kiila",
+      "label": "06 · Y-puristimen kiristyskiila, oikea",
+      "quantity": 2,
+      "size_mm": [
+        4.0,
+        24.0,
+        3.31
+      ],
+      "volume_mm3": 225.34,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Tasainen pohja alustalle; 2 kpl. Kiristetään sormin."
+    },
+    {
+      "name": "07_Sovituskiila",
+      "label": "07 · Mittarikiinnityksen sovituskiila",
+      "quantity": 4,
+      "size_mm": [
+        10.1,
+        4.4,
+        8.0
+      ],
+      "volume_mm3": 107.14,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Leveä sivuprofiili alustaa vasten; 4 kpl. Sovita kevyesti."
+    },
+    {
+      "name": "10_NFC_kansi_ESP_pidike",
+      "label": "10 · NFC-kansi + ESP32-C3-pidike",
+      "quantity": 1,
+      "size_mm": [
+        48.0,
+        44.9,
+        7.6
+      ],
+      "volume_mm3": 2599.3,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "PETG, tasainen alapinta alustalle. NFC-kansi napsautetaan kelkan kynsiin; ESP32 pujotetaan USB-pää edellä kiinteiden kynsien alle ja painetaan alas."
+    },
+    {
+      "name": "08_Kansi",
+      "label": "08 · Suojakansi / Wi-Fi-antenni",
+      "quantity": 1,
+      "size_mm": [
+        128.0,
+        110.0,
+        27.9
+      ],
+      "volume_mm3": 53360.41,
+      "valid": true,
+      "solids": 1,
+      "mesh_closed": true,
+      "print_note": "Laaja ulkopinta alustalle, avoin sisäpuoli ylöspäin."
+    }
+  ],
+  "warnings": [
+    "Mittarin kulmasäteitä, saranan ja lukituksen ulkonemia ei ole mitattu.",
+    "NFC-kortin paksuus, alapinnan komponentit ja liittimen korkeus varmistettava.",
+    "Napsautuskynsien käytännön jousto ja pitovoima varmistetaan PETG-sovitustulosteella.",
+    "Ei tiivistetty tai IP-luokiteltu kotelo. Sovituskiilat esitetty 6 mm ylhäällä.",
+    "NFC-kortin reikien 7 mm reunamittaa ei käytetä ilman reikien täydellisiä koordinaatteja."
+  ],
+  "nfc_pcb_plane_above_meter_mm": 3.6,
+  "nfc_component_to_cover_clearance_mm": 0.8,
+  "esp_holder_to_outer_cover_clearance_mm": 8.0,
+  "snap_geometry": {
+    "nfc_overlap_mm": 0.45,
+    "nfc_side_clearance_mm": 0.4,
+    "nfc_vertical_clearance_mm": 0.25,
+    "esp_overlap_mm": 0.45,
+    "esp_side_clearance_mm": 0.4,
+    "esp_vertical_clearance_mm": 0.35,
+    "esp_spring_slot_mm": 0.8
+  },
+  "antenna_route_mm": 35.99,
+  "overall_assembled_mm": [
+    128.0,
+    110.0,
+    36.0
+  ],
+  "assembly_interference_mm3": [
+    {
+      "a": "01 · Mittarin satula / sovitusrengas",
+      "b": "08 · Suojakansi / Wi-Fi-antenni",
+      "volume": 2.3046
+    }
+  ],
+  "travel_tests": [
+    {
+      "x": -20.0,
+      "y": -16.0,
+      "intersections": []
+    },
+    {
+      "x": -20.0,
+      "y": 0,
+      "intersections": []
+    },
+    {
+      "x": -20.0,
+      "y": 16.0,
+      "intersections": []
+    },
+    {
+      "x": 0,
+      "y": -16.0,
+      "intersections": []
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "intersections": []
+    },
+    {
+      "x": 0,
+      "y": 16.0,
+      "intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": -16.0,
+      "intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": 0,
+      "intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": 16.0,
+      "intersections": []
+    }
+  ],
+  "coax_motion_tests": [
+    {
+      "x": -20.0,
+      "y": -16.0,
+      "route_mm": 36.55,
+      "spare_mm": 33.45,
+      "plastic_intersections": []
+    },
+    {
+      "x": -20.0,
+      "y": 0,
+      "route_mm": 44.47,
+      "spare_mm": 25.53,
+      "plastic_intersections": []
+    },
+    {
+      "x": -20.0,
+      "y": 16.0,
+      "route_mm": 57.29,
+      "spare_mm": 12.71,
+      "plastic_intersections": []
+    },
+    {
+      "x": 0,
+      "y": -16.0,
+      "route_mm": 20.45,
+      "spare_mm": 49.55,
+      "plastic_intersections": []
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "route_mm": 35.99,
+      "spare_mm": 34.01,
+      "plastic_intersections": []
+    },
+    {
+      "x": 0,
+      "y": 16.0,
+      "route_mm": 51.93,
+      "spare_mm": 18.07,
+      "plastic_intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": -16.0,
+      "route_mm": 35.58,
+      "spare_mm": 34.42,
+      "plastic_intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": 0,
+      "route_mm": 43.77,
+      "spare_mm": 26.23,
+      "plastic_intersections": []
+    },
+    {
+      "x": 20.0,
+      "y": 16.0,
+      "route_mm": 56.81,
+      "spare_mm": 13.19,
+      "plastic_intersections": []
+    }
+  ],
+  "press_fit_note": "Ulkokannen sovite 3.5 / 3.4 mm. NFC-kansi ja ESP32 lukittuvat muotoon: 0.45 mm kynnen limitys, levossa ei tilavuusleikkauksia.",
+  "esp_insertion_test": {
+    "tilt_degrees": 22,
+    "overlap_mm3": 0.0
+  },
+  "snap_retention_tests": {
+    "seated_nfc_intersection_mm3": 0.0,
+    "seated_esp_intersection_mm3": 0.0,
+    "nfc_lift_0_7_mm_blocked_volume_mm3": 2.835,
+    "esp_lift_0_8_mm_blocked_volume_mm3": 0.70875
+  }
+}
