@@ -2,6 +2,10 @@
 
 These components add functionality to read NFC tags in multiple parts.
 
+![Installed NFC water meter reader](docs/images/watermeter-reader-installed.jpg)
+
+*Installed reader with the outer cover removed. Meter identification labels are redacted.*
+
 Original discussion: https://community.home-assistant.io/t/water-meter-reading-via-nfc/626124/20
 
 ## Printable enclosure and assembly
