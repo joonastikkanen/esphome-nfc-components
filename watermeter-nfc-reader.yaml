@@ -14,6 +14,7 @@ esphome:
 
 packages:
   native_meter_entities: !include watermeter_entities.yaml
+  reader_health: !include watermeter_health.yaml
 
 # One source only. Copy components/ alongside this YAML in ESPHome's config folder.
 external_components:
@@ -149,6 +150,7 @@ pn532_i2c:
   i2c_id: bus_a
   update_interval: 30s
   read_same_tag: true
+  response_timeout: 250ms
   on_tag:
     then:
       - lambda: |-
@@ -175,6 +177,12 @@ pn532_i2c:
             ESP_LOGW("watermeter", "Missing serial or invalid volume; retaining last good reading");
             return;
           }
+          // Freshness measures successful validated scans, not changes in the
+          // meter's own cached timestamp/volume. Never restore it across reboot.
+          id(i_pn532).record_valid_read();
+          auto now = id(sntp_time).utcnow();
+          if (now.is_valid())
+            id(nfc_last_success).publish_state(now.strftime("%Y-%m-%dT%H:%M:%SZ"));
           const auto full = reading.json(x, tag.get_tag_type(), true, false);
           const auto summary = reading.json(x, tag.get_tag_type(), false);
           id(water_meter_full_json).publish_state(full);

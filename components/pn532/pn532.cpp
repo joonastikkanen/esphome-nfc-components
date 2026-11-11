@@ -16,23 +16,31 @@ namespace pn532 {
 static const char *const TAG = "pn532";
 
 void PN532::setup() {
+  this->initialized_ = this->initialize_();
+  if (!this->initialized_)
+    this->status_set_warning();
+}
+
+bool PN532::initialize_() {
   ESP_LOGCONFIG(TAG, "Running setup");
+  this->requested_read_ = false;
+  this->rd_start_time_ = 0;
+  this->rd_ready_ = WOULDBLOCK;
+  this->error_code_ = NONE;
 
   // Get version data
   if (!this->write_command_({PN532_COMMAND_VERSION_DATA})) {
     ESP_LOGW(TAG, "Error sending version command, trying again");
     if (!this->write_command_({PN532_COMMAND_VERSION_DATA})) {
       ESP_LOGE(TAG, "Error sending version command");
-      this->mark_failed();
-      return;
+      return false;
     }
   }
 
   std::vector<uint8_t> version_data;
-  if (!this->read_response(PN532_COMMAND_VERSION_DATA, version_data)) {
+  if (!this->read_response(PN532_COMMAND_VERSION_DATA, version_data) || version_data.size() < 4) {
     ESP_LOGE(TAG, "Error getting version");
-    this->mark_failed();
-    return;
+    return false;
   }
   ESP_LOGD(TAG, "Found chip PN5%02X", version_data[0]);
   ESP_LOGD(TAG, "Firmware ver. %d.%d", version_data[1], version_data[2]);
@@ -44,15 +52,13 @@ void PN532::setup() {
           0x01,
       })) {
     ESP_LOGE(TAG, "No wakeup ack");
-    this->mark_failed();
-    return;
+    return false;
   }
 
   std::vector<uint8_t> wakeup_result;
   if (!this->read_response(PN532_COMMAND_SAMCONFIGURATION, wakeup_result)) {
     this->error_code_ = WAKEUP_FAILED;
-    this->mark_failed();
-    return;
+    return false;
   }
 
   // Set up SAM (secure access module)
@@ -64,8 +70,7 @@ void PN532::setup() {
           0x01,         // Enable IRQ
       })) {
     this->error_code_ = SAM_COMMAND_FAILED;
-    this->mark_failed();
-    return;
+    return false;
   }
 
   std::vector<uint8_t> sam_result;
@@ -75,11 +80,47 @@ void PN532::setup() {
       ESP_LOGV(TAG, " 0x%02X", dat);
     }
     this->error_code_ = SAM_COMMAND_FAILED;
-    this->mark_failed();
-    return;
+    return false;
   }
 
-  this->turn_off_rf_();
+  return this->turn_off_rf_();
+}
+
+void PN532::recover_() {
+  this->health_.recovery_started(millis());
+  ESP_LOGW(TAG, "Reinitializing PN532 after failed initialization or repeated failed scans (attempt %u)",
+           unsigned(this->health_.recoveries));
+  this->requested_read_ = false;
+  this->rd_start_time_ = 0;
+  this->rd_ready_ = WOULDBLOCK;
+  this->send_ack_();  // Abort a possibly outstanding command before resynchronizing.
+  this->current_uid_.clear();
+  this->initialized_ = this->initialize_();
+  // Keep failure history until a complete scan actually succeeds.
+  if (this->initialized_)
+    ESP_LOGI(TAG, "PN532 reinitialized; waiting for a successful NFC read");
+  else
+    ESP_LOGW(TAG, "PN532 recovery failed; retry in 30 seconds. Check wiring/power if SCL remains low");
+  this->status_set_warning();
+}
+
+void PN532::finish_scan_(bool success) {
+  const bool rf_ok = this->turn_off_rf_();
+  this->health_.scan_finished(success && rf_ok);
+  if (success && rf_ok)
+    this->status_clear_warning();
+  else
+    this->status_set_warning();
+}
+
+void PN532::record_valid_read() { this->health_.valid_read(millis()); }
+float PN532::get_read_age_seconds() { return this->health_.read_age_seconds(millis()); }
+const char *PN532::get_reader_status() const {
+  if (!this->initialized_)
+    return "PN532 unavailable; retrying";
+  if (this->health_.scan_failures > 0)
+    return "NFC scan failing";
+  return this->health_.has_valid_read ? "Reading" : "Waiting for valid meter data";
 }
 
 bool PN532::powerdown() {
@@ -95,8 +136,8 @@ bool PN532::powerdown() {
     ESP_LOGE(TAG, "Error reading PN532 powerdown response");
     return false;
   }
-  if (response[0] != 0x00) {
-    ESP_LOGE(TAG, "Error on PN532 powerdown: %02x", response[0]);
+  if (response.empty() || response[0] != 0x00) {
+    ESP_LOGE(TAG, "Invalid PN532 powerdown response");
     return false;
   }
   ESP_LOGV(TAG, "Powerdown successful");
@@ -105,7 +146,7 @@ bool PN532::powerdown() {
 }
 
 void PN532::update() {
-  if (!updates_enabled_ || this->requested_read_)
+  if (!updates_enabled_ || !this->initialized_ || this->requested_read_)
     return;
 
   for (auto *obj : this->binary_sensors_)
@@ -118,13 +159,20 @@ void PN532::update() {
       })) {
     ESP_LOGW(TAG, "Requesting tag read failed!");
     this->status_set_warning();
+    this->health_.scan_finished(false);
+    this->send_ack_();
     return;
   }
-  this->status_clear_warning();
   this->requested_read_ = true;
 }
 
 void PN532::loop() {
+  this->health_.tick(millis());
+  if (this->updates_enabled_ && !this->requested_read_ &&
+      this->health_.recovery_due(millis(), this->initialized_)) {
+    this->recover_();
+    return;
+  }
   if (!this->requested_read_)
     return;
 
@@ -151,12 +199,12 @@ void PN532::loop() {
         trigger->process(tag);
     }
     this->current_uid_ = {};
-    this->turn_off_rf_();
+    this->finish_scan_(false);
     return;
   }
 
   if (read.empty()) {
-    this->turn_off_rf_();
+    this->finish_scan_(false);
     return;
   }
   uint8_t num_targets = read[0];
@@ -168,18 +216,18 @@ void PN532::loop() {
         trigger->process(tag);
     }
     this->current_uid_ = {};
-    this->turn_off_rf_();
+    this->finish_scan_(false);
     return;
   }
 
   if (read.size() < 6U) {
-    this->turn_off_rf_();
+    this->finish_scan_(false);
     return;
   }
   uint8_t nfcid_length = read[5];
   if (nfcid_length == 0 || read.size() < 6U + nfcid_length) {
     // oops, pn532 returned invalid data
-    this->turn_off_rf_();
+    this->finish_scan_(false);
     return;
   }
   std::vector<uint8_t> nfcid(read.begin() + 6, read.begin() + 6 + nfcid_length);
@@ -196,7 +244,8 @@ void PN532::loop() {
     for (size_t i = 0; i < nfcid.size(); i++)
       same_uid &= nfcid[i] == this->current_uid_[i];
     if (same_uid && !this->read_same_tag_) {
-      this->turn_off_rf_();
+      // A deliberately suppressed duplicate is not a failed scan.
+      this->finish_scan_(true);
       return;
     }
   }
@@ -205,6 +254,7 @@ void PN532::loop() {
 
   if (next_task_ == READ) {
     auto tag = this->read_tag_(nfcid);
+    this->finish_scan_(tag->has_ndef_message());
     for (auto *trigger : this->triggers_ontag_)
       trigger->process(tag);
 
@@ -250,9 +300,10 @@ void PN532::loop() {
     }
   }
 
+  // READ already consumed the RF-off response before running user automations.
+  if (this->next_task_ != READ)
+    this->finish_scan_(true);
   this->read_mode();
-
-  this->turn_off_rf_();
 }
 
 bool PN532::write_command_(const std::vector<uint8_t> &data) {
@@ -287,7 +338,8 @@ bool PN532::write_command_(const std::vector<uint8_t> &data) {
   // Postamble
   write_data.push_back(0x00);
 
-  this->write_data(write_data);
+  if (!this->write_data(write_data))
+    return false;
 
   return this->read_ack_();
 }
@@ -296,7 +348,7 @@ bool PN532::read_ack_() {
   ESP_LOGV(TAG, "Reading ACK");
 
   std::vector<uint8_t> data;
-  if (!this->read_data(data, 6)) {
+  if (!this->read_data(data, 6) || data.size() < 7) {
     return false;
   }
 
@@ -338,7 +390,7 @@ enum PN532ReadReady PN532::read_ready_(bool block) {
       break;
     }
 
-    if (millis() - this->rd_start_time_ > 100) {
+    if (millis() - this->rd_start_time_ > this->response_timeout_ms_) {
       ESP_LOGV(TAG, "Timed out waiting for readiness from PN532!");
       this->rd_ready_ = TIMEOUT;
       break;
@@ -360,13 +412,18 @@ enum PN532ReadReady PN532::read_ready_(bool block) {
   return rdy;
 }
 
-void PN532::turn_off_rf_() {
+bool PN532::turn_off_rf_() {
   ESP_LOGV(TAG, "Turning RF field OFF");
-  this->write_command_({
+  if (!this->write_command_({
       PN532_COMMAND_RFCONFIGURATION,
       0x01,  // RF Field
       0x00,  // Off
-  });
+  }))
+    return false;
+  // RFConfiguration returns an empty response frame after its ACK. Consume it
+  // so the next command cannot mistake that pending response for its own ACK.
+  std::vector<uint8_t> response;
+  return this->read_response(PN532_COMMAND_RFCONFIGURATION, response);
 }
 
 std::unique_ptr<nfc::NfcTag> PN532::read_tag_(std::vector<uint8_t> &uid) {

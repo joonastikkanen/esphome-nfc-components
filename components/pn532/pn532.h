@@ -7,6 +7,7 @@
 #include "esphome/components/nfc/nfc_tag.h"
 #include "esphome/components/nfc/nfc.h"
 #include "esphome/components/nfc/automation.h"
+#include "reader_health.h"
 
 #include <cinttypes>
 #include <vector>
@@ -53,13 +54,23 @@ class PN532 : public PollingComponent {
 
   void read_mode();
   void set_read_same_tag(bool value) { this->read_same_tag_ = value; }
+  void set_response_timeout(uint32_t value) { this->response_timeout_ms_ = value; }
+  void record_valid_read();
+  bool has_valid_read() const { return this->health_.has_valid_read; }
+  float get_read_age_seconds();
+  uint32_t get_consecutive_failures() const { return this->health_.scan_failures; }
+  uint32_t get_recovery_count() const { return this->health_.recoveries; }
+  const char *get_reader_status() const;
   void clean_mode();
   void format_mode();
   void write_mode(nfc::NdefMessage *message);
   bool powerdown();
 
  protected:
-  void turn_off_rf_();
+  bool initialize_();
+  void recover_();
+  void finish_scan_(bool success);
+  bool turn_off_rf_();
   bool write_command_(const std::vector<uint8_t> &data);
   bool read_ack_();
   void send_ack_();
@@ -98,6 +109,9 @@ class PN532 : public PollingComponent {
   bool updates_enabled_{true};
   bool read_same_tag_{false};
   bool requested_read_{false};
+  bool initialized_{false};
+  uint32_t response_timeout_ms_{250};
+  ReaderHealth health_;
   std::vector<PN532BinarySensor *> binary_sensors_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontagremoved_;

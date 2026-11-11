@@ -1,0 +1,49 @@
+# Scan diagnostics are separate from the last-good consumption counters.
+sensor:
+  - platform: template
+    name: NFC Reading Age
+    id: nfc_reading_age
+    entity_category: diagnostic
+    device_class: duration
+    unit_of_measurement: s
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      return id(i_pn532).has_valid_read() ? id(i_pn532).get_read_age_seconds() : NAN;
+  - platform: template
+    name: NFC Consecutive Scan Failures
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(i_pn532).get_consecutive_failures();
+  - platform: template
+    name: NFC Recovery Attempts
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(i_pn532).get_recovery_count();
+
+binary_sensor:
+  - platform: template
+    name: NFC Reading Stale
+    id: nfc_reading_stale
+    entity_category: diagnostic
+    device_class: problem
+    lambda: |-
+      // Permit two scan opportunities plus a full-read margin at any configured interval.
+      const float limit = std::max(60.0f, id(nfc_read_interval).state * 2.0f + 10.0f);
+      return !id(i_pn532).has_valid_read() || id(i_pn532).get_read_age_seconds() > limit;
+
+text_sensor:
+  # Text preserves seconds; the normal sensor float cannot represent epoch
+  # timestamps at one-second precision. UTC ISO 8601, unknown until time sync.
+  - platform: template
+    name: NFC Last Successful Read
+    id: nfc_last_success
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    name: PN532 Status
+    entity_category: diagnostic
+    update_interval: 10s
+    lambda: return {id(i_pn532).get_reader_status()};

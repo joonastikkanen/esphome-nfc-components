@@ -32,6 +32,10 @@ PN532_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(PN532),
         cv.Optional("read_same_tag", default=False): cv.boolean,
+        cv.Optional("response_timeout", default="250ms"): cv.All(
+            cv.positive_time_period_milliseconds,
+            cv.Range(min=cv.TimePeriod(milliseconds=100), max=cv.TimePeriod(milliseconds=1000)),
+        ),
         cv.Optional(CONF_ON_TAG): automation.validate_automation(
             {
                 cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(nfc.NfcOnTagTrigger),
@@ -64,6 +68,7 @@ def CONFIG_SCHEMA(conf):
 async def setup_pn532(var, config):
     await cg.register_component(var, config)
     cg.add(var.set_read_same_tag(config["read_same_tag"]))
+    cg.add(var.set_response_timeout(config["response_timeout"].total_milliseconds))
 
     for conf in config.get(CONF_ON_TAG, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])
